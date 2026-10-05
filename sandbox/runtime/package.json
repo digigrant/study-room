@@ -1,0 +1,15 @@
+{
+  "name": "study-room-sandbox-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned Node packages installed into the Study Room sandbox image with `npm ci --ignore-scripts`. The lock manifest records this tree's integrity.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": "22.23.3"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.0.0",
+    "pi-web-search": "1.6.0",
+    "unpdf": "1.8.1"
+  }
+}

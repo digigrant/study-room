@@ -1,0 +1,224 @@
+{
+  "schema": 1,
+  "about": "Authoritative pins and integrity data for Study Room (SPEC 17). Change only through `study-room bump`; builds fail on any mismatch.",
+  "docker_sandboxes": {
+    "version": "0.46.0",
+    "apt_package": "docker-sbx",
+    "release_notes": "https://docs.docker.com/ai/sandboxes/release-notes/"
+  },
+  "docker_apt_repository": {
+    "url": "https://download.docker.com/linux/ubuntu",
+    "suite": "noble",
+    "component": "stable",
+    "architecture": "amd64",
+    "key_url": "https://download.docker.com/linux/ubuntu/gpg",
+    "key_fingerprint": "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+  },
+  "sandbox_image": {
+    "base": {
+      "reference": "docker/sandbox-templates:shell-0.7.0",
+      "digest": "sha256:c66aa9c0212bb710089cc356501f8bde8989e02a7071bf1c6be0893be1c30adf",
+      "platform": "linux/amd64",
+      "platform_manifest_digest": "sha256:bbef0c36f33daa5da4b57b7a504e8c945cdac52bcfe94141a51aee63333fc36e"
+    },
+    "repository": "study-room/sandbox",
+    "publish": false
+  },
+  "node": {
+    "version": "22.23.3",
+    "npm_version": "10.9.9",
+    "artifact": "node-v22.23.3-linux-x64.tar.xz",
+    "url": "https://nodejs.org/dist/v22.23.3/node-v22.23.3-linux-x64.tar.xz",
+    "sha256": "df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de",
+    "baseline_observed": "22.22.1",
+    "note": "Latest 22.x (Jod LTS) patch release at implementation time; includes the security releases published after the 22.22.1 baseline."
+  },
+  "npm": {
+    "lockfile": "sandbox/runtime/package-lock.json",
+    "lockfile_sha256": "07d68c835be287409a5bc5fdb8f78dda7c3221c3b358ef5d033514278bc9108e",
+    "installed_tree_sha256": "a3802b94aefaad3e88d083ee8b181b271ce7dab4cd4a3d9823371f55c4b562c4",
+    "installed_tree_entries": 16572,
+    "installed_tree_note": "Digest of node_modules after `npm ci` with the pinned npm (sandbox/bin/tree-digest.mjs). Needed because npm does not enforce lockfile integrity inside Pi's own npm-shrinkwrap.json.",
+    "packages": {
+      "@earendil-works/pi-coding-agent": {
+        "version": "1.0.0",
+        "integrity": "sha512-/FtbxoSQU/mEv1QnichJjRjqteqaIaMWxmhB4G367+MwZfX7/DI5B9YAg5lqbN7nztFskBEtUSZ+FlmMBECtMw==",
+        "license": "MIT",
+        "git_head": "a13d35a742c6ef8462812a28fbe1d8c8b7431c32"
+      },
+      "pi-web-search": {
+        "version": "1.6.0",
+        "integrity": "sha512-UwUDER9JoA/EwoTeJQZKQ23FctfY4o6ygFrahsRKeHBYExiadr4SMzJbqh6uScYtZGWrF1BJQ0A7UUsIj1NuWg==",
+        "license": "MIT",
+        "repository": "https://github.com/ttttmr/pi-web-search.git",
+        "inspected_commit": "66e14d30be2fc4b56ef4a0f77efd55cd81f1b5c4",
+        "git_head": "eb72d5553a47fc0803887c5c7e673a32e04fca57"
+      },
+      "unpdf": {
+        "version": "1.8.1",
+        "integrity": "sha512-xkURhy2SoGpOIH0a1gLHNkASPIQYonadDJs2AQwPEfUakafeD9EA1WTWWsaR++gfTCXJpV27W7tU1nXuk82UKQ==",
+        "license": "MIT",
+        "purpose": "PDF text extraction for the hardened web_fetch"
+      }
+    }
+  },
+  "git_sources": {
+    "learn": {
+      "url": "https://github.com/amosblomqvist/learn.git",
+      "commit": "7cfd8942f82ab9476e63572387e1fe9bcea5082c",
+      "tree": "30f434cb36fb1ceecb234d6d6efb482e470245d7",
+      "checkout": "/opt/study-room/upstream/learn",
+      "license": null,
+      "license_note": "Learn declares no license. V1 neither vendors nor publishes it; any fork, vendoring, patch or image publication must revisit licensing first (SPEC 10.1).",
+      "modified": false,
+      "load": [
+        "skills/teach",
+        "extensions/ask-user-question.ts",
+        "extensions/quiz.ts",
+        "extensions/md-log.ts"
+      ],
+      "never_load": [
+        "skills/visualize",
+        "extensions/visual-tools",
+        "agents/researcher.md",
+        "agents/svg-maker.md",
+        "agents/mermaid-maker.md"
+      ]
+    },
+    "pi-interactive-subagents": {
+      "url": "https://github.com/amosblomqvist/pi-interactive-subagents.git",
+      "commit": "c3e8b53c0754ae5ccc19fdab5a7481ec039bc2f7",
+      "tree": "b7ff347d5d550ed799ca506ea035c31acb28cbb1",
+      "checkout": "/opt/study-room/upstream/pi-interactive-subagents",
+      "license": "MIT",
+      "modified": false
+    }
+  },
+  "obsidian_desktop": {
+    "version": "1.14.4",
+    "format": "deb",
+    "architecture": "amd64",
+    "url": "https://github.com/obsidianmd/obsidian-releases/releases/download/v1.14.4/obsidian_1.14.4_amd64.deb",
+    "sha256": "85b10dcba6edfc1c0460a6d18260cf31c30447a444bd858a6440b9c9c8806d25",
+    "size": 108364996
+  },
+  "infisical": {
+    "cli": null,
+    "client": "REST API over HTTPS from the trusted host (Python standard library); no Infisical CLI or SDK is installed",
+    "api": {
+      "login": "POST /api/v1/auth/universal-auth/login",
+      "read_secret": "GET /api/v4/secrets/{name}",
+      "create_secret": "POST /api/v4/secrets/{name}",
+      "update_secret": "PATCH /api/v4/secrets/{name}",
+      "create_folder": "POST /api/v2/folders"
+    }
+  },
+  "system_packages": {
+    "host": [
+      {
+        "name": "libsecret-tools",
+        "source": "ubuntu",
+        "constraint": ">= 0.21"
+      },
+      {
+        "name": "gnome-keyring",
+        "source": "ubuntu",
+        "constraint": ">= 46"
+      },
+      {
+        "name": "dbus-user-session",
+        "source": "ubuntu",
+        "constraint": ">= 1.14"
+      },
+      {
+        "name": "xdg-utils",
+        "source": "ubuntu",
+        "constraint": ">= 1.1.3"
+      },
+      {
+        "name": "gnupg",
+        "source": "ubuntu",
+        "constraint": ">= 2.4"
+      },
+      {
+        "name": "ca-certificates",
+        "source": "ubuntu",
+        "constraint": ">= 20240203"
+      },
+      {
+        "name": "docker-ce",
+        "source": "docker",
+        "constraint": ">= 27"
+      },
+      {
+        "name": "docker-ce-cli",
+        "source": "docker",
+        "constraint": ">= 27"
+      },
+      {
+        "name": "containerd.io",
+        "source": "docker",
+        "constraint": ">= 1.7"
+      },
+      {
+        "name": "docker-buildx-plugin",
+        "source": "docker",
+        "constraint": ">= 0.17"
+      },
+      {
+        "name": "docker-sbx",
+        "source": "docker",
+        "constraint": "= 0.46.0"
+      }
+    ],
+    "sandbox": [
+      {
+        "name": "tmux",
+        "constraint": ">= 3.4"
+      },
+      {
+        "name": "xz-utils",
+        "constraint": ">= 5.4"
+      }
+    ]
+  },
+  "verification": {
+    "openai": {
+      "status": "candidate",
+      "model": "gpt-5.4-mini",
+      "pi_provider": "openai",
+      "thinking": "low",
+      "note": "Candidate only. Pin after `study-room models openai` shows it in the authenticated catalog (SPEC 14.2, 26).",
+      "limits": {
+        "max_requests": 1,
+        "max_output_tokens": 64,
+        "timeout_seconds": 60
+      },
+      "research_limits": {
+        "max_model_turns": 3,
+        "max_search_calls": 1,
+        "max_output_tokens": 400,
+        "timeout_seconds": 180
+      }
+    },
+    "kimi": {
+      "status": "candidate",
+      "model": "kimi-for-coding",
+      "pi_provider": "kimi-coding",
+      "thinking": "low",
+      "note": "Kimi stays experimental until its authenticated capability gate passes (SPEC 15.5).",
+      "limits": {
+        "max_requests": 1,
+        "max_output_tokens": 64,
+        "timeout_seconds": 60
+      },
+      "research_limits": {
+        "max_model_turns": 3,
+        "max_search_calls": 1,
+        "max_output_tokens": 400,
+        "timeout_seconds": 180
+      }
+    }
+  },
+  "patches": []
+}
