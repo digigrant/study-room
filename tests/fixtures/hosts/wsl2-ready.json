@@ -1,0 +1,61 @@
+{
+  "description": "WSL2 host after a completed setup: pinned sbx signed in, policy initialized, Obsidian pinned, groups applied",
+  "machine": "x86_64",
+  "user": "learner",
+  "uid": 1000,
+  "files": {
+    "/etc/os-release": "PRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nID=ubuntu\nID_LIKE=debian\n",
+    "/proc/sys/kernel/osrelease": "5.15.167.4-microsoft-standard-WSL2\n"
+  },
+  "paths": [
+    "/run/WSL",
+    "/mnt/wslg",
+    "/run/systemd/system",
+    "/run/user/1000/bus",
+    "/dev/kvm"
+  ],
+  "rw_paths": [
+    "/dev/kvm"
+  ],
+  "env": {
+    "WAYLAND_DISPLAY": "wayland-0",
+    "DISPLAY": ":0",
+    "XDG_RUNTIME_DIR": "/run/user/1000",
+    "HOME": "/home/learner"
+  },
+  "groups": [
+    "learner",
+    "sudo",
+    "kvm",
+    "docker"
+  ],
+  "configured_groups": [
+    "learner",
+    "sudo",
+    "kvm",
+    "docker"
+  ],
+  "disk_free_gib": 80,
+  "binaries": [
+    "sudo",
+    "git",
+    "busctl",
+    "dpkg-query",
+    "sbx",
+    "secret-tool",
+    "docker"
+  ],
+  "commands_output": {
+    "busctl --user status org.freedesktop.secrets": {
+      "rc": 0,
+      "stdout": "PID=1234\n"
+    },
+    "sbx version --json": "{\"client\": {\"version\": \"v0.46.0\", \"revision\": \"991967dc\"}, \"server\": {\"state\": \"running\"}}",
+    "sbx policy ls": {
+      "rc": 0,
+      "stdout": "NAME  TYPE  DECISION\n"
+    },
+    "dpkg-query -W -f=${Version} obsidian": "1.14.4",
+    "sbx ls --json": "{\"sandboxes\": []}"
+  }
+}

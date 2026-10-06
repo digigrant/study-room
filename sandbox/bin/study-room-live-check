@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /opt/study-room/node/bin/node /opt/study-room/bin/study-room-live-check.ts "$@"

@@ -234,13 +234,13 @@ def detect(probe: Probe | None = None) -> HostFacts:
     facts.sbx_cli = probe.which("sbx") is not None
     if facts.sbx_cli:
         facts.sbx_version = _sbx_version(probe)
-        login = probe.run(["sbx", "login", "status"])
-        facts.sbx_logged_in = login.ok if login.returncode != 127 else None
+        # sbx has no login-status command; listing sandboxes requires a login.
+        login = probe.run(["sbx", "ls", "--json"])
+        login_text = (login.stdout + login.stderr).lower()
+        facts.sbx_logged_in = True if login.ok else (False if "login" in login_text else None)
         policy = probe.run(["sbx", "policy", "ls"])
-        if policy.returncode == 127:
-            facts.sbx_policy_initialized = None
-        else:
-            facts.sbx_policy_initialized = policy.ok and "not initialized" not in (policy.stdout + policy.stderr).lower()
+        policy_text = (policy.stdout + policy.stderr).lower()
+        facts.sbx_policy_initialized = policy.ok and "not initialized" not in policy_text and "policy init" not in policy_text
 
     if probe.which("dpkg-query"):
         res = probe.run(["dpkg-query", "-W", "-f=${Version}", "obsidian"])

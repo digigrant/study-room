@@ -14,6 +14,7 @@ export interface LoggedRequest {
   system: string;
   messages: Array<{ role: string; text: string }>;
   last: { role: string; text: string };
+  maxTokens: number | null;
 }
 
 export type Reply =
@@ -75,6 +76,7 @@ export class FakeProvider {
       system: messages.find((m: any) => m.role === "system" || m.role === "developer")?.text ?? "",
       messages,
       last: messages[messages.length - 1] ?? { role: "", text: "" },
+      maxTokens: parsed.max_completion_tokens ?? parsed.max_tokens ?? parsed.max_output_tokens ?? null,
     };
     this.log.push(entry);
     const script = this.scripts[entry.model];

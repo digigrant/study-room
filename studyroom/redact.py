@@ -48,13 +48,13 @@ _PATTERNS: list[tuple[re.Pattern[str], str]] = [
     # JSON fields: "access_token": "....", including escaped quotes inside.
     (
         re.compile(
-            r'("(?:%s)"\s*:\s*")((?:\\.|[^"\\])*)(")' % "|".join(_TOKEN_FIELD_NAMES)
+            r'("(?:%s)"\s*:\s*")((?:\\.|[^"\\]){8,})(")' % "|".join(_TOKEN_FIELD_NAMES)
         ),
         r"\1" + REDACTED + r"\3",
     ),
     # Form / query fields: access_token=...&
     (
-        re.compile(r"\b((?:%s)=)([^&\s\"']+)" % "|".join(_TOKEN_FIELD_NAMES)),
+        re.compile(r"\b((?:%s)=)([^&\s\"']{8,})" % "|".join(_TOKEN_FIELD_NAMES)),
         r"\1" + REDACTED,
     ),
     # Authorization headers.
