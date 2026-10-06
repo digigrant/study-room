@@ -578,7 +578,7 @@ def parser() -> argparse.ArgumentParser:
     s.add_argument("--live", action="store_true", required=True)
     s.add_argument("--provider", choices=PROVIDERS, default="openai")
     s.add_argument("components", nargs="*", help=f"any of: {', '.join(verifymod.COMPONENTS + ('infisical', 'egress'))} (default: provider)")
-    s.add_argument("--tailscale-peer", metavar="HOST:PORT", help="egress check: a Tailscale peer address the host can reach")
+    s.add_argument("--tailscale-peer", metavar="HOST:PORT", help="egress check: a Tailscale peer IPv4 address and port the host can reach")
     s.set_defaults(fn=cmd_verify)
     s = sub.add_parser("check-updates", help="show dependency drift (installs nothing)")
     s.add_argument("--refresh", action="store_true")

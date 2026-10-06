@@ -65,7 +65,7 @@ When a change only takes effect in a new session (group membership, a new keyrin
 
 ### Host egress guard
 
-Docker Sandboxes makes every sandbox connection from its host daemon. Its own policy does not check what a host name resolves to. Without a host rule, a public name pointing at a home-network address (your router, a NAS, a phone on Tailscale) could therefore be reached from a sandbox in `web` mode. The guard prevents that. Setup's `egress-guard` change:
+Docker Sandboxes makes every sandbox connection from its host daemon. Its own policy does not check what a host name resolves to. Without a host rule, a public name pointing at a home-network device's private address (your router, a NAS, a phone on Tailscale) could therefore be reached from a sandbox in `web` mode. The guard prevents that. A device's global IPv6 address is not covered: see the residual risks in [SECURITY.md](SECURITY.md#host-egress-guard). Setup's `egress-guard` change:
 
 1. installs the guard as root at `/usr/local/libexec/study-room/sbx-egress-guard`;
 2. installs a sudo rule, `/etc/sudoers.d/study-room-egress`, checked with `visudo -cf`, that allows only the guard's `load`, `unload` and `status` actions;
@@ -89,16 +89,18 @@ At every start the unit loads the guard from inside its own cgroup, then runs `s
 Prove it on the real host (it asks for confirmation and `sudo`):
 
 ```bash
-study-room verify --live egress --tailscale-peer <tailscale-ip>:<port>
+study-room verify --live egress --tailscale-peer <tailscale-ipv4>:<port>
 ```
 
 The check:
 
 - creates a dummy interface with `10.213.0.1` and a test web server;
-- confirms the host can reach it, but the sandbox cannot, by address or through `10-213-0-1.sslip.io`, even with a temporary sandbox allow rule. Each sandbox attempt passes only if the guard's rejection counter rises during it; a refusal by Docker Sandboxes' own policy (403) or a failed `sbx exec` fails the step, because the guard was not exercised;
+- confirms the host can reach it, but the sandbox cannot, even with a temporary sandbox allow rule:
+  - through `10-213-0-1.sslip.io`, a public name that resolves to the test address. This is the step that proves the guard: it passes only if the guard's rejection counter rises during it. A refusal by Docker Sandboxes' own policy (403) or a failed `sbx exec` fails it, because the guard was not exercised;
+  - by address. The sandbox's own deny rule for `10.0.0.0/8` usually answers first with a 403, and the step is then reported as skipped; it passes only if the request reached the guard and the guard rejected it;
 - confirms the sandbox still reaches `api.github.com`;
 - shows that `tailscaled` and the Magic Conch hub run outside the daemon's unit, and that Tailscale and the hub's session port keep working;
-- with `--tailscale-peer`, connects to that peer from the host and checks that the guard rejects it from the sandbox.
+- with `--tailscale-peer`, connects to that peer from the host, then checks that the guard rejects the sandbox's request to it through `<a-b-c-d>.sslip.io`, a public name that resolves to the peer's address. Like the test-address name, this step passes only if the guard's rejection counter rises. It is skipped if that name does not resolve to the peer, for example when the peer is not given as an IPv4 address.
 
 Everything temporary is removed afterwards.
 

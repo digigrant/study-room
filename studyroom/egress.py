@@ -349,6 +349,7 @@ def live_verify(
     Tailscale and the Magic Conch hub keep working. Every step reports passed, failed
     or skipped (with its reason); temporary changes are always undone."""
     peer_host, peer_port = (tailscale_peer.rsplit(":", 1)[0], int(tailscale_peer.rsplit(":", 1)[1])) if tailscale_peer else (None, None)
+    peer_name = f"{peer_host.replace('.', '-')}.sslip.io" if peer_host else None
     lines = [
         "Egress guard live check (no provider requests):",
         f"  1. create a dummy interface {TEST_IFACE} with {TEST_IP} and a test web server on port {TEST_PORT} (sudo)",
@@ -357,7 +358,7 @@ def live_verify(
         "  4. check that tailscaled and the Magic Conch hub run outside the daemon's unit and still work",
     ]
     if tailscale_peer:
-        lines.append(f"  5. Tailscale peer {tailscale_peer}: reachable from the host, rejected by the host guard from the sandbox (temporary allow)")
+        lines.append(f"  5. Tailscale peer {tailscale_peer}: reachable from the host; through {peer_name}:{peer_port}, rejected by the host guard from the sandbox (temporary allow)")
     lines.append("  Everything temporary is removed afterwards.")
     if not confirm(lines):
         raise fail(Failure.PERMISSION_DECLINED, "egress live check not confirmed; nothing changed")
@@ -403,13 +404,15 @@ def live_verify(
         m = re.search(r"rejected=(\d+)", res.stdout or "")
         return int(m.group(1)) if m else -1
 
-    def guarded(name: str, url: str, label: str) -> None:
+    def guarded(name: str, url: str, label: str, *, literal: bool = False) -> None:
         before = rejected()
         code = sandbox_code(url)
         after = rejected()
         seen = f"sandbox -> {label}: {code}, guard rejections {before} -> {after}"
         if code == "200":
             record(name, "failed", f"{seen}; the sandbox reached it")
+        elif code == "403" and literal:
+            record(name, "skipped", f"{seen}; the sandbox's own deny rule for this range answered first, so the host guard was not exercised")
         elif code == "403" or code.startswith("exit"):
             record(name, "failed", f"{seen}; refused by Docker Sandboxes' own policy or the exec failed, so the host guard was not exercised")
         elif not after > before >= 0:
@@ -432,7 +435,7 @@ def live_verify(
         host = http_get(url)
         record("host_private", "passed" if host == 200 else "failed", f"host process -> {url}: {host}")
         allow(f"{TEST_IP}:{TEST_PORT}")
-        guarded("sandbox_private_literal", url, url)
+        guarded("sandbox_private_literal", url, url, literal=True)
         if TEST_IP in resolve(TEST_HOSTNAME):
             allow(f"{TEST_HOSTNAME}:{TEST_PORT}")
             guarded("sandbox_private_hostname", f"http://{TEST_HOSTNAME}:{TEST_PORT}/", f"{TEST_HOSTNAME} (resolves to {TEST_IP})")
@@ -452,8 +455,11 @@ def live_verify(
         if peer_host:
             ok = tcp_connect(peer_host, peer_port)
             record("tailscale_host_peer", "passed" if ok else "failed", f"host -> {tailscale_peer}: {'connected' if ok else 'unreachable'}")
-            allow(f"{peer_host}:{peer_port}")
-            guarded("sandbox_tailscale_peer", f"http://{peer_host}:{peer_port}/", tailscale_peer)
+            if peer_host in resolve(peer_name):
+                allow(f"{peer_name}:{peer_port}")
+                guarded("sandbox_tailscale_peer", f"http://{peer_name}:{peer_port}/", f"{peer_name} (resolves to {peer_host})")
+            else:
+                record("sandbox_tailscale_peer", "skipped", f"{peer_name} does not resolve to {peer_host} from this host (give the peer's Tailscale IPv4 address)")
         else:
             record("tailscale_host_peer", "skipped", "no --tailscale-peer HOST:PORT given")
         if tcp_connect("127.0.0.1", hub_port):

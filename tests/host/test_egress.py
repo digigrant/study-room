@@ -251,7 +251,7 @@ class LiveVerifyTests(TempHome):
             check=kw.get("check", lambda: []),
             http_get=kw.get("http_get", lambda url: 200),
             tcp_connect=kw.get("tcp_connect", lambda host, port: True),
-            resolve=kw.get("resolve", lambda name: ["10.213.0.1"]),
+            resolve=kw.get("resolve", lambda name: {"10-213-0-1.sslip.io": ["10.213.0.1"], "100-101-102-103.sslip.io": ["100.101.102.103"]}.get(name, [])),
             start_server=start,
             tailscale_peer=kw.get("tailscale_peer"),
         )
@@ -274,6 +274,10 @@ class LiveVerifyTests(TempHome):
         removes = [e for e in self.events if e.startswith("policy rm network")]
         self.assertEqual(len(allows), 3)
         self.assertEqual(len(removes), 3, "every temporary allow is removed")
+        self.assertIn("policy allow network 100-101-102-103.sslip.io:8443", allows)
+        probed = [a[-1] for a in self.runner.argvs() if a[:2] == ["sbx", "exec"]]
+        self.assertIn("http://100-101-102-103.sslip.io:8443/", probed, "the peer is probed through a name that resolves to it")
+        self.assertNotIn("http://100.101.102.103:8443/", probed, "the peer's literal address would only meet the sandbox's own deny")
         self.assertEqual((server["started"], server["stopped"]), (1, 1))
         self.assertTrue(any("ip link del" in e for e in self.events), "the dummy interface is removed")
 
@@ -296,7 +300,7 @@ class LiveVerifyTests(TempHome):
     def test_a_refusal_by_docker_sandboxes_policy_does_not_count_as_the_guard(self) -> None:
         self.runner.on(["sbx", "exec"], lambda argv, _i: Result(argv, 0, "200" if "api.github.com" in argv[-1] else "403"))
         out, _ = self.verify(tailscale_peer="100.101.102.103:8443")
-        self.assertEqual(out["sandbox_private_literal"], "failed")
+        self.assertEqual(out["sandbox_private_literal"], "skipped", "the sandbox's own deny for 10.0.0.0/8 answers literal addresses first")
         self.assertEqual(out["sandbox_private_hostname"], "failed")
         self.assertEqual(out["sandbox_tailscale_peer"], "failed")
         self.assertEqual(out["sandbox_public"], "passed")
@@ -324,6 +328,11 @@ class LiveVerifyTests(TempHome):
         out, _ = self.verify()
         self.assertEqual(out["sandbox_private_literal"], "passed")
         self.assertEqual(out["sandbox_private_hostname"], "failed", "a 502 without a guard rejection is not the guard")
+
+    def test_a_peer_name_that_does_not_resolve_to_the_peer_is_skipped(self) -> None:
+        out, _ = self.verify(tailscale_peer="phone.tail1234.ts.net:8443")
+        self.assertEqual(out["sandbox_tailscale_peer"], "skipped")
+        self.assertFalse(any("ts.net" in a[-1] for a in self.runner.argvs() if a[:3] == ["sbx", "policy", "allow"]))
 
     def test_cleanup_runs_when_a_step_raises(self) -> None:
         def boom(_url):
