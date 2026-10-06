@@ -115,13 +115,23 @@ export function checkLoadout(loadout: LoadoutSnapshot, policy: ResearcherPolicy)
   return allow;
 }
 
-/** Locate the loadout of a named subagent in the spawner's registry, or null. */
-export function findLoadout(sessionDir: string, sessionId: string, name: string): LoadoutSnapshot | null {
+/** The session file a named subagent last ran in, from the spawner's registry. */
+export function findSessionFile(sessionDir: string, sessionId: string, name: string): string | null {
   try {
     const registry = JSON.parse(readFileSync(join(sessionDir, "artifacts", sessionId, "subagent-registry.json"), "utf8"));
-    const entry = registry?.[name];
-    if (!entry?.sessionFile) return null;
-    return JSON.parse(readFileSync(`${entry.sessionFile}.loadout.json`, "utf8")) as LoadoutSnapshot;
+    const file = registry?.[name]?.sessionFile;
+    return typeof file === "string" && file ? file : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Locate the loadout of a named subagent in the spawner's registry, or null. */
+export function findLoadout(sessionDir: string, sessionId: string, name: string): LoadoutSnapshot | null {
+  const sessionFile = findSessionFile(sessionDir, sessionId, name);
+  if (!sessionFile) return null;
+  try {
+    return JSON.parse(readFileSync(`${sessionFile}.loadout.json`, "utf8")) as LoadoutSnapshot;
   } catch {
     return null;
   }

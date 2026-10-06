@@ -1,0 +1,3 @@
+#!/bin/sh
+# Runs the pinned Pi on the pinned Node, whatever else is on PATH.
+exec /opt/study-room/node/bin/node /opt/study-room/runtime/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js "$@"

@@ -25,7 +25,7 @@ function tmux(args: string[]): string {
 export function listPanes(session = SESSION): Pane[] {
   let out: string;
   try {
-    out = tmux(["list-panes", "-s", "-t", session, "-F", "#{pane_id}\t#{pane_pid}\t#{@study-room-role}\t#{pane_dead}"]);
+    out = tmux(["list-panes", "-s", "-t", session, "-F", "#{pane_id}|#{pane_pid}|#{@study-room-role}|#{pane_dead}"]);
   } catch {
     return [];
   }
@@ -33,7 +33,7 @@ export function listPanes(session = SESSION): Pane[] {
     .split("\n")
     .filter(Boolean)
     .map((line) => {
-      const [id, pid, role, dead] = line.split("\t");
+      const [id, pid, role, dead] = line.split("|");
       return { id, pid: Number(pid), role: role ?? "", dead: dead === "1" };
     });
 }
@@ -86,6 +86,7 @@ export function environ(pid: number): Record<string, string> {
 export interface SubagentPane extends Pane {
   agent: string;
   subagentId: string;
+  sessionFile: string;
 }
 
 export function subagentPanes(session = SESSION): SubagentPane[] {
@@ -96,7 +97,7 @@ export function subagentPanes(session = SESSION): SubagentPane[] {
     for (const pid of [pane.pid, ...descendants(pane.pid, map)]) {
       const env = environ(pid);
       if (env.PI_SUBAGENT_AGENT) {
-        out.push({ ...pane, agent: env.PI_SUBAGENT_AGENT, subagentId: env.PI_SUBAGENT_ID ?? "" });
+        out.push({ ...pane, agent: env.PI_SUBAGENT_AGENT, subagentId: env.PI_SUBAGENT_ID ?? "", sessionFile: env.PI_SUBAGENT_SESSION ?? "" });
         break;
       }
     }

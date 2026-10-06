@@ -7,10 +7,11 @@
 // editing rule visible.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { readFileSync } from "node:fs";
-import { checkLoadout, checkSpawn, findLoadout, type ResearcherPolicy } from "../../lib/policy.ts";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { checkLoadout, checkSpawn, findLoadout, findSessionFile, type ResearcherPolicy } from "../../lib/policy.ts";
 import { layout, loadProfile, piModel, type Profile } from "../../lib/profile.ts";
 import { killSubagentPanes, markMainPane, subagentPanes } from "../../lib/panes.ts";
+import { PANE_CLOSED_GRACE_MS, PaneClosureWatch } from "../../lib/closure.ts";
 
 export const MD_LOG_REMINDER =
   "md-log: link a NEW, EMPTY note, keep it view-only in every Obsidian client while logging is active, and run /md-unlog before editing it.";
@@ -39,6 +40,32 @@ export default function studyRoomGuard(pi: ExtensionAPI) {
     loadError = err?.message ?? String(err);
   }
 
+  // pi-interactive-subagents waits for a researcher by reading its tmux pane.
+  // If the pane is closed before the researcher prints its exit sentinel, the
+  // package would wait forever; this watch reports the closure through the
+  // package's own `.exit` sidecar instead (SPEC 11.4: tmux pane closure).
+  const closure = new PaneClosureWatch({
+    panes: () => subagentPanes(),
+    writeExit: (sessionFile: string, message: string) => {
+      const exitFile = `${sessionFile}.exit`;
+      if (!existsSync(exitFile)) writeFileSync(exitFile, JSON.stringify({ type: "error", errorMessage: message }));
+    },
+  });
+  let closureTimer: ReturnType<typeof setInterval> | null = null;
+
+  pi.on("tool_result", async (event: any) => {
+    if (event.toolName !== "subagent" && event.toolName !== "subagent_message") return undefined;
+    const d = event.details;
+    if (d?.status === "started" && typeof d.sessionFile === "string") closure.started(d.sessionFile, String(d.name ?? ""));
+    return undefined;
+  });
+
+  pi.on("message_end", async (event: any) => {
+    const m = event?.message;
+    if (m?.customType === "subagent_result" && typeof m.details?.sessionFile === "string") closure.finished(m.details.sessionFile);
+    return undefined;
+  });
+
   pi.on("tool_call", async (event: any, ctx: any) => {
     if (event.toolName !== "subagent" && event.toolName !== "subagent_message") return undefined;
     if (!policy) {
@@ -54,11 +81,19 @@ export default function studyRoomGuard(pi: ExtensionAPI) {
     const loadout = findLoadout(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId(), name);
     if (!loadout) return undefined; // unknown names are refused by the package itself
     const decision = checkLoadout(loadout, policy);
-    return decision.allow ? undefined : { block: true, reason: decision.reason };
+    if (!decision.allow) return { block: true, reason: decision.reason };
+    // A sidecar left from an earlier closure would end the resumed run at once.
+    const entry = findSessionFile(ctx.sessionManager.getSessionDir(), ctx.sessionManager.getSessionId(), name);
+    if (entry && !closure.isTracked(entry)) rmSync(`${entry}.exit`, { force: true });
+    return undefined;
   });
 
   pi.on("session_start", async (_event: any, ctx: any) => {
     markMainPane(process.env.TMUX_PANE);
+    if (!closureTimer) {
+      closureTimer = setInterval(() => closure.tick(Date.now()), Math.min(2000, PANE_CLOSED_GRACE_MS));
+      closureTimer.unref?.();
+    }
     // Any researcher pane alive now belongs to a previous parent: an orphan.
     const orphans = killSubagentPanes();
     if (ctx.hasUI) {
@@ -75,6 +110,9 @@ export default function studyRoomGuard(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async (event: any) => {
+    if (closureTimer) clearInterval(closureTimer);
+    closureTimer = null;
+    closure.clear();
     // Parent exit: researchers cannot deliver results any more; stop them.
     if (event?.reason === "quit") killSubagentPanes();
   });

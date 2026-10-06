@@ -273,7 +273,13 @@ def build_args(d: dict) -> dict[str, str]:
         "SUBAGENTS_COMMIT": subagents["commit"],
         "SUBAGENTS_TREE": subagents["tree"],
         "SANDBOX_APT_PACKAGES": " ".join(p["name"] for p in d["system_packages"]["sandbox"]),
+        "SANDBOX_APT_CONSTRAINTS": " ".join(_apt_constraint(p) for p in d["system_packages"]["sandbox"]),
     }
+
+
+def _apt_constraint(pkg: dict) -> str:
+    op, _, version = str(pkg["constraint"]).partition(" ")
+    return f"{pkg['name']}:{op}:{version}"
 
 
 def require_valid(lock: Lock, root: Path | None = None) -> None:
