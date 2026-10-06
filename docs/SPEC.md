@@ -468,6 +468,7 @@ In `web` mode, either agent can send mounted study data to an arbitrary public w
 > - A firewall rule matching that unit's cgroup rejects its connections to private, link-local and CGNAT addresses (IPv4 and IPv6), regardless of host name. Loopback and port 53 stay open.
 > - The rule covers every Docker Sandbox on the host, which the captain accepted. It does not affect Tailscale, the Magic Conch hub, or other host processes. On WSL2 it lives in the distribution's own firewall, not in Windows.
 > - `study-room run` fails closed without the guard.
+> - Residual risk: on an IPv6-enabled network, a home-network device's global-unicast IPv6 address is outside the guarded ranges, so in `web` mode a name resolving to one could still reach it (native Ubuntu; WSL2 only with mirrored networking).
 >
 > See `docs/SECURITY.md` (Host egress guard).
 

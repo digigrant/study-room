@@ -451,9 +451,11 @@ class RepositoryHygieneTests(TempHome):
         self.assertEqual(offenders, [])
 
     def test_gitignore_excludes_state_and_artifacts(self) -> None:
-        text = (repo_root() / ".gitignore").read_text()
-        for pattern in ("node_modules", "*.jsonl", ".env", "obsidian-vault/"):
-            self.assertIn(pattern, text)
+        paths = ["node_modules/x/index.js", "sandbox/node_modules/x", "sessions/a.jsonl", ".env", ".env.local", "obsidian-vault/n.md", "oauth-state.json"]
+        res = subprocess.run(["git", "check-ignore", "--no-index", "--", *paths], cwd=repo_root(), capture_output=True, text=True)
+        self.assertEqual(res.stdout.splitlines(), paths, res.stderr)
+        res = subprocess.run(["git", "check-ignore", "--no-index", "--", "studyroom/egress.py"], cwd=repo_root(), capture_output=True, text=True)
+        self.assertEqual(res.returncode, 1, "source files are not ignored")
 
 
 class EgressProbeTests(TempHome):

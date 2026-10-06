@@ -57,7 +57,7 @@ It then asks before each change. What each change is for:
 - **docker-group** (optional): lets `study-room build` use Docker without sudo. Membership is root-equivalent on the host. If you decline, use `study-room run --sudo-docker`.
 - **sbx-policy**: only if Docker Sandboxes' global network policy was never initialized, `sbx policy init balanced`. An existing policy is never changed. All of Study Room's own rules are scoped to its sandbox.
 - **obsidian**: the pinned `.deb`, downloaded to `~/.cache/study-room/downloads` and checked against the lock's SHA-256 before `sudo apt-get install`.
-- **egress-guard** (required, on native Ubuntu and on WSL2): runs the Docker Sandboxes daemon in a managed unit, with a host firewall rule that stops every sandbox from reaching other devices on your network. See [the host egress guard](#host-egress-guard).
+- **egress-guard** (required, on native Ubuntu and on WSL2): runs the Docker Sandboxes daemon in a managed unit, with a host firewall rule that stops every sandbox from reaching other devices' private addresses on your network. A device's global IPv6 address is not covered: see the residual risks in [SECURITY.md](SECURITY.md#host-egress-guard). See [the host egress guard](#host-egress-guard).
 
 When a change only takes effect in a new session (group membership, a new keyring daemon), setup says so and stops. Log out and back in, then run `study-room setup` again. Finished steps are not repeated: a second run on a ready host reports "No host changes are needed."
 
@@ -95,10 +95,10 @@ study-room verify --live egress --tailscale-peer <tailscale-ip>:<port>
 The check:
 
 - creates a dummy interface with `10.213.0.1` and a test web server;
-- confirms the host can reach it, but the sandbox cannot, by address or through `10-213-0-1.sslip.io`, even with a temporary sandbox allow rule;
+- confirms the host can reach it, but the sandbox cannot, by address or through `10-213-0-1.sslip.io`, even with a temporary sandbox allow rule. Each sandbox attempt passes only if the guard's rejection counter rises during it; a refusal by Docker Sandboxes' own policy (403) or a failed `sbx exec` fails the step, because the guard was not exercised;
 - confirms the sandbox still reaches `api.github.com`;
 - shows that `tailscaled` and the Magic Conch hub run outside the daemon's unit, and that Tailscale and the hub's session port keep working;
-- with `--tailscale-peer`, connects to that peer from the host and fails to reach it from the sandbox.
+- with `--tailscale-peer`, connects to that peer from the host and checks that the guard rejects it from the sandbox.
 
 Everything temporary is removed afterwards.
 

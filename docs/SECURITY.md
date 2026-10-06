@@ -91,7 +91,8 @@ By the captain's decision of 2026-10-06 (option (a), backed by the host):
 
 Residual risks:
 
-- In `web` mode, a name that resolves to a loopback address could still reach a host service listening on port 80 or 443 on this machine. Loopback is deliberately left open; other devices on the network are not reachable.
+- In `web` mode, a name that resolves to a loopback address could still reach a host service listening on port 80 or 443 on this machine. Loopback is deliberately left open.
+- In `web` mode, on an IPv6-enabled network, a name that resolves to a home-network device's global-unicast IPv6 address could still reach that device on port 80 or 443. The guard rejects only the fixed private, link-local, CGNAT and ULA ranges above, and a device's global address lies outside them. This applies on native Ubuntu, and on WSL2 only if the non-default mirrored networking mode is enabled. Other devices' private IPv4, ULA and link-local addresses are not reachable.
 - A Docker Sandboxes daemon started outside the unit is not covered. `study-room run` refuses to start Study Room while one is running, and `doctor` reports it.
 
 ## GitHub

@@ -1,10 +1,10 @@
 // Pinned-runtime compatibility (SPEC 10.1, 10.3, 11.1):
 // * Learn and pi-interactive-subagents are unmodified, clean checkouts at
 //   their pinned commits, read-only for normal use;
-// * every module they import is a Node builtin, a relative file, or a module
-//   the pinned Pi supplies through its virtual module map (the legacy
-//   @mariozechner/* and @sinclair/typebox aliases). A Pi bump that drops an
-//   alias fails here instead of tempting a source patch;
+// * every module they import is a Node builtin, a relative file, or one of
+//   the legacy @mariozechner/* and @sinclair/typebox aliases, and the pinned
+//   Pi's extension loader resolves each alias. A Pi bump that drops an alias
+//   fails here instead of tempting a source patch;
 // * the subagent package's own unit tests pass unmodified on the pinned Node,
 //   run through an external loader that supplies the same aliases.
 
@@ -47,12 +47,22 @@ function bareImports(file: string): string[] {
   return [...specs].filter((s) => !s.startsWith(".") && !s.startsWith("/"));
 }
 
-function piVirtualModules(): Set<string> {
-  const src = readFileSync(join(PI, "dist", "core", "extensions", "virtual-modules.js"), "utf8");
-  const keys = new Set<string>();
-  const block = src.slice(src.indexOf("VIRTUAL_MODULES"));
-  for (const m of block.matchAll(/^\s*"?([@a-z0-9/._-]+)"?\s*:/gim)) keys.add(m[1]);
-  return keys;
+const ALIASES = ["@mariozechner/pi-coding-agent", "@mariozechner/pi-tui", "@mariozechner/pi-ai", "@mariozechner/pi-agent-core", "@sinclair/typebox"];
+
+function runPi(extensions: string[], env: Record<string, string> = {}) {
+  const tmp = mkdtempSync(join(tmpdir(), "sr-compat-"));
+  try {
+    const r = spawnSync(join(ROOT, "bin", "pi"), ["--no-extensions", ...extensions.flatMap((e) => ["-e", e]), "--help"], {
+      encoding: "utf8",
+      env: { ...process.env, PI_CODING_AGENT_DIR: tmp, PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", HOME: tmp, ...env },
+      timeout: 60_000,
+    });
+    const output = `${r.stdout}\n${r.stderr}`;
+    assert.equal(r.status, 0, output);
+    assert.ok(!/failed to load|error loading|cannot find module/i.test(output), output);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 describe("pinned upstream checkouts", { skip }, () => {
@@ -72,7 +82,6 @@ describe("pinned upstream checkouts", { skip }, () => {
 });
 
 describe("legacy import compatibility", { skip }, () => {
-  const virtual = skip ? new Set<string>() : piVirtualModules();
   const files = skip
     ? []
     : [
@@ -81,9 +90,24 @@ describe("legacy import compatibility", { skip }, () => {
         join(LEARN, "extensions", "md-log.ts"),
         ...tsFiles(join(SUBAGENTS, "pi-extension")),
       ];
-  it("Pi still provides the @mariozechner/* and @sinclair/typebox aliases", () => {
-    for (const alias of ["@mariozechner/pi-coding-agent", "@mariozechner/pi-tui", "@mariozechner/pi-ai", "@mariozechner/pi-agent-core", "@sinclair/typebox"]) {
-      assert.ok(virtual.has(alias), `${alias} is supplied by the pinned Pi`);
+  it("Pi's extension loader still resolves the @mariozechner/* and @sinclair/typebox aliases", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "sr-alias-"));
+    try {
+      const report = join(tmp, "report.json");
+      const probe = join(tmp, "alias-probe.ts");
+      writeFileSync(
+        probe,
+        `import { writeFileSync } from "node:fs";\n` +
+          ALIASES.map((a, i) => `import * as m${i} from ${JSON.stringify(a)};\n`).join("") +
+          `writeFileSync(process.env.STUDY_ROOM_ALIAS_REPORT!, JSON.stringify({ ${ALIASES.map((a, i) => `${JSON.stringify(a)}: Object.keys(m${i}).length`).join(", ")} }));\n` +
+          `export default function () {}\n`,
+      );
+      runPi([probe], { STUDY_ROOM_ALIAS_REPORT: report });
+      assert.ok(existsSync(report), "Pi loaded the probe extension");
+      const exports = JSON.parse(readFileSync(report, "utf8"));
+      for (const alias of ALIASES) assert.ok(exports[alias] > 0, `${alias} resolves to a module with exports`);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
     }
   });
   it("every import of the loaded upstream code resolves without patching", () => {
@@ -91,33 +115,19 @@ describe("legacy import compatibility", { skip }, () => {
     const unresolved: string[] = [];
     for (const file of files) {
       for (const spec of bareImports(file)) {
-        if (builtins.has(spec) || spec.startsWith("node:") || virtual.has(spec)) continue;
+        if (builtins.has(spec) || spec.startsWith("node:") || ALIASES.includes(spec)) continue;
         unresolved.push(`${file}: ${spec}`);
       }
     }
     assert.deepEqual(unresolved, []);
   });
   it("Pi loads the approved Learn extensions and the subagent extension", () => {
-    const tmp = mkdtempSync(join(tmpdir(), "sr-compat-"));
-    try {
-      const r = spawnSync(
-        join(ROOT, "bin", "pi"),
-        [
-          "--no-extensions",
-          "-e", join(LEARN, "extensions", "ask-user-question.ts"),
-          "-e", join(LEARN, "extensions", "quiz.ts"),
-          "-e", join(LEARN, "extensions", "md-log.ts"),
-          "-e", join(SUBAGENTS, "pi-extension", "subagents", "index.ts"),
-          "--help",
-        ],
-        { encoding: "utf8", env: { ...process.env, PI_CODING_AGENT_DIR: tmp, PI_OFFLINE: "1", PI_SKIP_VERSION_CHECK: "1", HOME: tmp }, timeout: 60_000 },
-      );
-      const output = `${r.stdout}\n${r.stderr}`;
-      assert.equal(r.status, 0, output);
-      assert.ok(!/failed to load|error loading|cannot find module/i.test(output), output);
-    } finally {
-      rmSync(tmp, { recursive: true, force: true });
-    }
+    runPi([
+      join(LEARN, "extensions", "ask-user-question.ts"),
+      join(LEARN, "extensions", "quiz.ts"),
+      join(LEARN, "extensions", "md-log.ts"),
+      join(SUBAGENTS, "pi-extension", "subagents", "index.ts"),
+    ]);
   });
 });
 

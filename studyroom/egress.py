@@ -42,8 +42,6 @@ SLICE = "study-room.slice"
 GUARD_INSTALL_PATH = "/usr/local/libexec/study-room/sbx-egress-guard"
 SUDOERS_PATH = "/etc/sudoers.d/study-room-egress"
 STATUS_FILE = "/run/study-room/sbx-egress.json"
-GUARDED_V4 = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10")
-GUARDED_V6 = ("fc00::/7", "fe80::/10")
 _USER_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 
 
@@ -192,9 +190,11 @@ def check(
                 f"sbx daemon stop; {restart}",
             )
         )
+    live = runner.run(["sudo", "-n", GUARD_INSTALL_PATH, "status"], timeout=30)
+    loaded = re.search(r"^loaded cgroup=(\S+)", live.stdout or "", re.M)
     status_text = _read(Path(status_file))
-    if status_text is None:
-        problems.append(Problem("guard_not_loaded", "the host egress guard is not loaded", restart))
+    if not live.ok or not loaded or loaded.group(1) != expected or status_text is None:
+        problems.append(Problem("guard_not_loaded", "the host egress guard's firewall rules are not loaded for the daemon's unit", restart))
     else:
         try:
             status = json.loads(status_text)
@@ -353,11 +353,11 @@ def live_verify(
         "Egress guard live check (no provider requests):",
         f"  1. create a dummy interface {TEST_IFACE} with {TEST_IP} and a test web server on port {TEST_PORT} (sudo)",
         f"  2. temporarily allow {TEST_IP}:{TEST_PORT} and {TEST_HOSTNAME}:{TEST_PORT} in the {sandbox} sandbox's own policy",
-        "  3. expect the host to reach it and the sandbox to be refused; expect the sandbox to reach api.github.com",
+        "  3. expect the host to reach it and the host guard to reject the sandbox; expect the sandbox to reach api.github.com",
         "  4. check that tailscaled and the Magic Conch hub run outside the daemon's unit and still work",
     ]
     if tailscale_peer:
-        lines.append(f"  5. Tailscale peer {tailscale_peer}: reachable from the host, refused from the sandbox (temporary allow)")
+        lines.append(f"  5. Tailscale peer {tailscale_peer}: reachable from the host, rejected by the host guard from the sandbox (temporary allow)")
     lines.append("  Everything temporary is removed afterwards.")
     if not confirm(lines):
         raise fail(Failure.PERMISSION_DECLINED, "egress live check not confirmed; nothing changed")
@@ -403,6 +403,20 @@ def live_verify(
         m = re.search(r"rejected=(\d+)", res.stdout or "")
         return int(m.group(1)) if m else -1
 
+    def guarded(name: str, url: str, label: str) -> None:
+        before = rejected()
+        code = sandbox_code(url)
+        after = rejected()
+        seen = f"sandbox -> {label}: {code}, guard rejections {before} -> {after}"
+        if code == "200":
+            record(name, "failed", f"{seen}; the sandbox reached it")
+        elif code == "403" or code.startswith("exit"):
+            record(name, "failed", f"{seen}; refused by Docker Sandboxes' own policy or the exec failed, so the host guard was not exercised")
+        elif not after > before >= 0:
+            record(name, "failed", f"{seen}; the guard did not reject this request")
+        else:
+            record(name, "passed", f"{seen}; rejected by the host guard")
+
     try:
         for argv in (
             ["sudo", "ip", "link", "add", TEST_IFACE, "type", "dummy"],
@@ -417,18 +431,13 @@ def live_verify(
         url = f"http://{TEST_IP}:{TEST_PORT}/"
         host = http_get(url)
         record("host_private", "passed" if host == 200 else "failed", f"host process -> {url}: {host}")
-        before = rejected()
         allow(f"{TEST_IP}:{TEST_PORT}")
-        code = sandbox_code(url)
-        record("sandbox_private_literal", "passed" if code != "200" else "failed", f"sandbox -> {url}: {code} (must not be 200)")
+        guarded("sandbox_private_literal", url, url)
         if TEST_IP in resolve(TEST_HOSTNAME):
             allow(f"{TEST_HOSTNAME}:{TEST_PORT}")
-            code = sandbox_code(f"http://{TEST_HOSTNAME}:{TEST_PORT}/")
-            record("sandbox_private_hostname", "passed" if code != "200" else "failed", f"sandbox -> {TEST_HOSTNAME} (resolves to {TEST_IP}): {code}")
+            guarded("sandbox_private_hostname", f"http://{TEST_HOSTNAME}:{TEST_PORT}/", f"{TEST_HOSTNAME} (resolves to {TEST_IP})")
         else:
             record("sandbox_private_hostname", "skipped", f"{TEST_HOSTNAME} does not resolve to {TEST_IP} from this host")
-        after = rejected()
-        record("counters", "passed" if after > before >= 0 else "failed", f"guard rejections {before} -> {after}")
         code = sandbox_code(PUBLIC_URL)
         record("sandbox_public", "passed" if code == "200" else "failed", f"sandbox -> {PUBLIC_URL}: {code}")
         if runner.which("tailscale"):
@@ -444,8 +453,7 @@ def live_verify(
             ok = tcp_connect(peer_host, peer_port)
             record("tailscale_host_peer", "passed" if ok else "failed", f"host -> {tailscale_peer}: {'connected' if ok else 'unreachable'}")
             allow(f"{peer_host}:{peer_port}")
-            code = sandbox_code(f"http://{peer_host}:{peer_port}/")
-            record("sandbox_tailscale_peer", "passed" if code != "200" else "failed", f"sandbox -> {tailscale_peer}: {code} (must not be 200)")
+            guarded("sandbox_tailscale_peer", f"http://{peer_host}:{peer_port}/", tailscale_peer)
         else:
             record("tailscale_host_peer", "skipped", "no --tailscale-peer HOST:PORT given")
         if tcp_connect("127.0.0.1", hub_port):

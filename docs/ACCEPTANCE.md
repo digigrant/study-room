@@ -59,10 +59,10 @@ What it cannot prove is the real host: the WSL2 kernel modules, the real daemon,
    - Pi starts in tmux in `/workspace`; `!pwd` prints the resolved path of the vault's `Study Room/` directory, which is mounted at the same path it has on the host;
    - `!ls /workspace/..` shows no `.obsidian`.
 7. **Egress guard.** `study-room verify --live egress --tailscale-peer <phone-or-device-tailscale-ip>:<port>`. Expected:
-    - `host_private` passes (the host reaches the test address); `sandbox_private_literal` and `sandbox_private_hostname` pass, which means the sandbox was refused; the guard's `counters` rise;
+    - `host_private` passes (the host reaches the test address); `sandbox_private_literal` and `sandbox_private_hostname` pass, which means the host guard rejected the sandbox: the guard's rejection counter rose during each step, and neither Docker Sandboxes' own policy (403) nor a failed `sbx exec` answered instead;
     - `sandbox_public` passes;
     - `tailscale_cgroup` and `hub_cgroup` pass (the processes run outside the daemon's unit), and so do `tailscale_running` and `hub_session_port`;
-    - `tailscale_host_peer` connects from the host, and `sandbox_tailscale_peer` is refused from the sandbox.
+    - `tailscale_host_peer` connects from the host, and `sandbox_tailscale_peer` passes the same way: the host guard rejects it from the sandbox.
 
     Then start a sandbox daemon by hand outside the unit (`systemctl --user stop study-room-sbx.service; sbx daemon start -d`). Expected: `study-room run` refuses to start, and `doctor` reports `daemon runs outside study-room-sbx.service`. Put it back with `sbx daemon stop; systemctl --user start study-room-sbx.service`.
 8. **Pi sees only `Study Room/`.** Ask Pi to write `hello.md` in `/workspace`. Expected: it appears in Obsidian within seconds. `study-room-diagnose` inside the sandbox reports "only Study Room/ is mounted" and "vault paths are not Git repositories".

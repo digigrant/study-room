@@ -221,7 +221,8 @@ def build_plan(
                 "firewall",
                 "Run the Docker Sandboxes daemon in a managed unit with a host egress guard",
                 "rejects the daemon's connections to private, link-local, CGNAT (Tailscale) and IPv6 ULA addresses, whatever name led there, "
-                "so no sandbox can reach other devices on the home network. It covers every Docker Sandbox this user runs; "
+                "so no sandbox can reach other devices' private addresses on the home network (a device's global IPv6 address is not covered; "
+                "see docs/SECURITY.md). It covers every Docker Sandbox this user runs; "
                 "tailscaled, the Magic Conch hub and other programs are not affected",
                 commands,
                 after=f"`study-room doctor` checks that the daemon runs inside {egress.UNIT}",

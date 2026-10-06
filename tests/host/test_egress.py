@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 from pathlib import Path
 
@@ -23,18 +22,6 @@ UNIT_CGROUP = "user.slice/user-1000.slice/user@1000.service/study-room.slice/stu
 
 
 class RulesTests(TempHome):
-    def test_guarded_ranges_cover_private_link_local_and_cgnat(self) -> None:
-        self.assertEqual(egress.GUARDED_V4, ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10"))
-        self.assertEqual(egress.GUARDED_V6, ("fc00::/7", "fe80::/10"))
-        self.assertNotIn("127.0.0.0/8", egress.GUARDED_V4, "loopback stays open: DNS stub and approved host services (Magic Conch session port)")
-
-    def test_the_guard_script_uses_the_same_ranges(self) -> None:
-        text = egress.guard_source().read_text()
-        v4 = re.search(r"^GUARDED_V4=\(([^)]*)\)", text, re.M).group(1).split()
-        v6 = re.search(r"^GUARDED_V6=\(([^)]*)\)", text, re.M).group(1).split()
-        self.assertEqual(tuple(v4), egress.GUARDED_V4)
-        self.assertEqual(tuple(v6), egress.GUARDED_V6)
-
     def test_the_guard_script_parses(self) -> None:
         res = subprocess.run(["bash", "-n", str(egress.guard_source())], capture_output=True, text=True)
         self.assertEqual(res.returncode, 0, res.stderr)
@@ -89,6 +76,7 @@ class CheckTests(TempHome):
         self.status = self.tmp / "run" / "sbx-egress.json"
         self.status.parent.mkdir()
         self.active = FakeRunner().on(["systemctl", "--user", "is-active", egress.UNIT], "active\n")
+        self.active.on(["sudo", "-n", egress.GUARD_INSTALL_PATH, "status"], f"loaded cgroup={UNIT_CGROUP} rejected=0\n")
 
     def write_status(self, inode: int | None = None) -> None:
         ino = inode if inode is not None else (self.cgroot / UNIT_CGROUP).stat().st_ino
@@ -121,6 +109,19 @@ class CheckTests(TempHome):
         self.assertIn("guard_not_loaded", self.codes(self.check(proc)))
         self.write_status(inode=1)
         self.assertIn("guard_stale", self.codes(self.check(proc)))
+
+    def test_flushed_firewall_rules_are_noticed_despite_the_status_file(self) -> None:
+        proc = fake_proc(self.tmp, {100: (["/usr/bin/sbx", "daemon", "start"], UNIT_CGROUP)})
+        self.write_status()
+        for live in (Result([], 0, "loaded cgroup=none rejected=0\n"), Result([], 3, "not loaded\n"), Result([], 1, "", "sudo: a password is required\n")):
+            self.active.on(["sudo", "-n", egress.GUARD_INSTALL_PATH, "status"], live)
+            self.assertEqual(self.codes(self.check(proc)), ["guard_not_loaded"], live.stdout or live.stderr)
+
+    def test_rules_loaded_for_another_cgroup_are_not_the_guard(self) -> None:
+        proc = fake_proc(self.tmp, {100: (["/usr/bin/sbx", "daemon", "start"], UNIT_CGROUP)})
+        self.write_status()
+        self.active.on(["sudo", "-n", egress.GUARD_INSTALL_PATH, "status"], "loaded cgroup=user.slice/user-1001.slice/user@1001.service/study-room.slice/study-room-sbx.service rejected=0\n")
+        self.assertEqual(self.codes(self.check(proc)), ["guard_not_loaded"])
 
     def test_no_daemon(self) -> None:
         self.write_status()
@@ -263,7 +264,6 @@ class LiveVerifyTests(TempHome):
         self.assertEqual(out["sandbox_private_literal"], "passed", "the sandbox cannot reach the private address")
         self.assertEqual(out["sandbox_private_hostname"], "passed", "nor through a public name that resolves to it")
         self.assertEqual(out["sandbox_public"], "passed")
-        self.assertEqual(out["counters"], "passed")
         self.assertEqual(out["tailscale_cgroup"], "passed")
         self.assertEqual(out["tailscale_running"], "passed")
         self.assertEqual(out["tailscale_host_peer"], "passed")
@@ -292,6 +292,38 @@ class LiveVerifyTests(TempHome):
         self.runner.on(["sbx", "exec"], lambda argv, _i: Result(argv, 0, "200"))
         out, _ = self.verify()
         self.assertEqual(out["sandbox_private_literal"], "failed")
+
+    def test_a_refusal_by_docker_sandboxes_policy_does_not_count_as_the_guard(self) -> None:
+        self.runner.on(["sbx", "exec"], lambda argv, _i: Result(argv, 0, "200" if "api.github.com" in argv[-1] else "403"))
+        out, _ = self.verify(tailscale_peer="100.101.102.103:8443")
+        self.assertEqual(out["sandbox_private_literal"], "failed")
+        self.assertEqual(out["sandbox_private_hostname"], "failed")
+        self.assertEqual(out["sandbox_tailscale_peer"], "failed")
+        self.assertEqual(out["sandbox_public"], "passed")
+
+    def test_a_failed_exec_does_not_count_as_the_guard(self) -> None:
+        def exec_(argv, _i):
+            if "api.github.com" in argv[-1]:
+                return Result(argv, 0, "200")
+            self.rejected += 1
+            return Result(argv, 1, "", "sbx: sandbox not running")
+
+        self.runner.on(["sbx", "exec"], exec_)
+        out, _ = self.verify()
+        self.assertEqual(out["sandbox_private_literal"], "failed")
+
+    def test_each_step_needs_its_own_guard_rejection(self) -> None:
+        def exec_(argv, _i):
+            if "api.github.com" in argv[-1]:
+                return Result(argv, 0, "200")
+            if "sslip.io" not in argv[-1]:
+                self.rejected += 1
+            return Result(argv, 0, "502")
+
+        self.runner.on(["sbx", "exec"], exec_)
+        out, _ = self.verify()
+        self.assertEqual(out["sandbox_private_literal"], "passed")
+        self.assertEqual(out["sandbox_private_hostname"], "failed", "a 502 without a guard rejection is not the guard")
 
     def test_cleanup_runs_when_a_step_raises(self) -> None:
         def boom(_url):

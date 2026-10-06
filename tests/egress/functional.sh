@@ -116,7 +116,18 @@ expect_open "$unit" "http://10.213.0.1:8080/" "new daemon cgroup before reload (
 load "$unit" >/dev/null && ok "reloaded"
 expect_blocked "$unit" "http://10.213.0.1:8080/" "new daemon cgroup after reload"
 
-echo "# 7. unload removes everything"
+echo "# 7. status reports the live rules, so a flushed firewall is noticed even though the status file remains"
+st=$(load "$unit" status 2>/dev/null)
+[[ $st == "loaded cgroup=${prefix#/}/$unit_rel "* ]] && ok "status names the unit cgroup" || bad "status after load: $st"
+ip6tables -w -F OUTPUT
+st=$(load "$unit" status 2>/dev/null)
+[[ $st == "loaded cgroup=none "* ]] && ok "status reports no cgroup once the IPv6 jump is gone" || bad "status without the IPv6 jump: $st"
+load "$unit" >/dev/null && iptables -w -F OUTPUT
+st=$(load "$unit" status 2>/dev/null)
+[[ $st == "loaded cgroup=none "* ]] && ok "status reports no cgroup once the IPv4 jump is gone" || bad "status without the IPv4 jump: $st"
+load "$unit" >/dev/null
+
+echo "# 8. unload removes everything"
 load "$unit" unload && ok "unloaded" || bad "unload failed"
 iptables -S STUDY-ROOM-SBX >/dev/null 2>&1 && bad "IPv4 chain still present" || ok "IPv4 chain removed"
 ip6tables -S STUDY-ROOM-SBX >/dev/null 2>&1 && bad "IPv6 chain still present" || ok "IPv6 chain removed"

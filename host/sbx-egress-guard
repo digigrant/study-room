@@ -120,6 +120,9 @@ case ${1:-} in
       rejected=$((rejected + n))
     done
     path=$(iptables -w -S OUTPUT | sed -n "s/.*--path \([^ ]*\) -j $CHAIN\$/\1/p" | head -1)
+    path6=$(ip6tables -w -S OUTPUT 2>/dev/null | sed -n "s/.*--path \([^ ]*\) -j $CHAIN\$/\1/p" | head -1)
+    path=${path//\"/} path6=${path6//\"/}
+    [ "$path" = "$path6" ] || path=
     echo "loaded cgroup=${path:-none} rejected=$rejected"
     ;;
   *)
