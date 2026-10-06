@@ -78,3 +78,52 @@ def parse(text: str, *, provider: str, installation_id: str) -> OAuthState:
         raise fail(Failure.CREDENTIALS_NOT_CONFIGURED, f"stored {provider} authorization state lacks an expiry")
     known = set(OAuthState.__dataclass_fields__)
     return OAuthState(**{k: v for k, v in data.items() if k in known})
+
+
+# ── The stored document ─────────────────────────────────────────────────────
+#
+# By the captain's decision (2026-10-06) each provider's OAuth state lives in
+# one existing secret in the Agents project (OPENAI_REFRESH_TOKEN for OpenAI).
+# Several hosts (WSL2, native Ubuntu) may use the same secret, and each must
+# rotate independently (SPEC 15.2), so the value is a document with one entry
+# per installation ID. A host only ever changes its own entry.
+
+DOC_KIND = "study-room-oauth"
+
+
+def empty_document(provider: str) -> dict:
+    return {"kind": DOC_KIND, "schema": SCHEMA, "provider": provider, "installations": {}}
+
+
+def parse_document(text: str | None, provider: str) -> tuple[dict, bool]:
+    """Return (document, foreign). A missing or blank value is a fresh document;
+    a value Study Room did not write is reported as foreign, never reused."""
+    if text is None or not text.strip():
+        return empty_document(provider), False
+    try:
+        data = json.loads(text)
+    except ValueError:
+        redact.register(text.strip())  # e.g. a bare token pasted by hand: still a secret
+        return empty_document(provider), True
+    if not isinstance(data, dict) or data.get("kind") != DOC_KIND or data.get("provider") != provider or not isinstance(data.get("installations"), dict):
+        redact.register_mapping(data)
+        return empty_document(provider), True
+    redact.register_mapping(data)
+    return data, False
+
+
+def entry(document: dict, provider: str, installation_id: str) -> OAuthState | None:
+    raw = document.get("installations", {}).get(installation_id)
+    if raw is None:
+        return None
+    return parse(json.dumps(raw), provider=provider, installation_id=installation_id)
+
+
+def with_entry(document: dict, state: OAuthState) -> dict:
+    doc = json.loads(json.dumps(document))
+    doc["installations"][state.installation_id] = asdict(state)
+    return doc
+
+
+def dump_document(document: dict) -> str:
+    return json.dumps(document, sort_keys=True, separators=(",", ":"))

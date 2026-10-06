@@ -530,6 +530,8 @@ The identity MUST receive only the narrow read/write scope needed for Study Room
 
 It MUST NOT receive project-wide write authority merely for convenience. If the required path scope cannot be enforced, implementation stops for explicit review rather than silently broadening access.
 
+> **Review outcome (captain, 2026-10-06).** Infisical's Free plan cannot enforce path-scoped grants. After review, the OpenAI OAuth state is kept in the existing Agents project, in the secret `OPENAI_REFRESH_TOKEN` (Kimi: `KIMI_REFRESH_TOKEN`). There is no paid upgrade and no separate project. `sbx-host` receives write access in that project. Study Room's client writes only those configured secrets. The value holds one entry per installation ID, so per-host state and independent rotation are preserved. See `docs/IMPLEMENTATION.md`.
+
 Each host has a random installation ID and independent OAuth state. Hostnames need not be embedded in secret names. Per-host state avoids concurrent refresh-token rotation races across WSL and native Ubuntu installations.
 
 ### 15.3 Host keyring

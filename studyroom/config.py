@@ -10,6 +10,7 @@ state.
 from __future__ import annotations
 
 import copy
+import re
 import uuid
 from pathlib import Path
 
@@ -63,8 +64,13 @@ DEFAULTS: dict = {
     "infisical": {
         "domain": "https://app.infisical.com",
         "environment": "dev",
-        "oauth_path_prefix": "/study-room/oauth",
-        "oauth_secret_name": "OAUTH_STATE",
+        # Captain's decision (2026-10-06): provider OAuth state is kept in the
+        # existing Agents project, in the secret the captain created for it.
+        # One value per provider holds an entry per installation ID.
+        "oauth_secrets": {
+            "openai": {"path": "/", "name": "OPENAI_REFRESH_TOKEN"},
+            "kimi": {"path": "/", "name": "KIMI_REFRESH_TOKEN"},
+        },
         "github_secret_path": "/",
         "github_secret_name": "GITHUB_GEJ_MACHINE_PAT",
     },
@@ -209,6 +215,11 @@ def validate(data: dict) -> None:
         problems.append("vault.study_dir must be a single directory name")
     if vault.get("path") and not Path(str(vault["path"])).expanduser().is_absolute():
         problems.append("vault.path must be absolute")
+    for provider, loc in (data.get("infisical", {}).get("oauth_secrets") or {}).items():
+        if provider not in PROVIDERS:
+            problems.append(f"infisical.oauth_secrets.{provider} is not a known provider")
+        elif not isinstance(loc, dict) or not str(loc.get("path", "")).startswith("/") or not re.fullmatch(r"[A-Z][A-Z0-9_]{1,127}", str(loc.get("name", ""))):
+            problems.append(f"infisical.oauth_secrets.{provider} needs an absolute path and an UPPER_CASE secret name")
     sandbox_name = data.get("sandbox", {}).get("name", "")
     if not sandbox_name or not sandbox_name.replace("-", "").isalnum():
         problems.append("sandbox.name must be alphanumeric with dashes")

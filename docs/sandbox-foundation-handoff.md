@@ -7,7 +7,7 @@
 | Seam | Study Room implementation | Evidence it generalizes | Open questions |
 | --- | --- | --- | --- |
 | Keyring access | `studyroom/keyring.py`: per-tool Secret Service namespace; `SearchItems` for the locked state without prompting; values only on stdin | devenv implements the same pattern independently | Whether one shared namespace or per-tool namespaces is better |
-| Infisical access | `studyroom/infisical.py`: Universal Auth per call, token revoked after use, writes refused outside a prefix | devenv reads secrets the same way; Study Room adds writes | Path-scoped permissions depend on the Infisical plan |
+| Infisical access | `studyroom/infisical.py`: Universal Auth per call, token revoked after use, writes limited to an allowlist of secrets; per-installation entries in a shared secret | devenv reads secrets the same way; Study Room adds writes | Path-scoped permissions need a paid Infisical plan |
 | Docker Sandbox secret registration | `studyroom/entry.py` `register_secrets`: command-backed placeholders (path and name only), placeholder reuse | devenv also uses command-backed secrets | Behaviour of custom secrets across sbx versions |
 | Host prerequisite checks | `studyroom/hostdetect.py` plus JSON fixtures, capability-based (WSLg versus native) | Both projects target WSL2 and native Ubuntu | Which prerequisites are common |
 | Deterministic update checks | `studyroom/updates.py` (cached, non-blocking), `studyroom/bump.py` (branch-only, rebuild, test) | devenv pins with `versions.env` and `devenv bump` | One lock format or two |

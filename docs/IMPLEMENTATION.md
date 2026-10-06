@@ -41,7 +41,16 @@ How the code maps to [SPEC](SPEC.md), and the places where an implementation con
 
 **Live-check limits.** A Pi extension that throws from `before_provider_request` does not cancel the request. A hermetic test proved this: a looping run sent thousands of requests to the fake provider. The verification-budget extension therefore blocks and terminates tool calls once the last allowed turn is used, and exits the process before any over-budget request is sent.
 
-**Infisical.** Writes use the v4 secrets API. A missing folder is created on the first write, and a "change approval" response is treated as a failure, not a write. The client refuses any write outside `/study-room/oauth/`. An optional separate project for OAuth state supports deployments that cannot scope by path.
+**Infisical storage (captain's decision, 2026-10-06).** SPEC 15.2 describes a per-host path, `/study-room/oauth/<provider>/<installation-id>`, with a path-scoped grant. Infisical's Free plan cannot scope grants by path. The captain decided the OpenAI token lives in the existing Agents project, in the `OPENAI_REFRESH_TOKEN` secret. To keep per-host independence, its value is a document with one entry per installation ID:
+
+```json
+{"kind": "study-room-oauth", "schema": 1, "provider": "openai", "installations": {"<installation-id>": {"access": "…", "refresh": "…", "expires_ms": 0, "client_id": "…", "generation": 3}}}
+```
+
+- A host merges only its own entry into the latest document, writes it back, and reads it back twice. If another host's simultaneous write dropped the entry, it merges again.
+- Writes use the v4 secrets API; a "change approval" response is treated as a failure, not a write.
+- The client refuses to write any secret other than the configured OAuth secrets.
+- A value Study Room did not write (for example a token pasted by hand) is never used, and is replaced only after confirmation in `study-room auth`.
 
 **Kimi catalog endpoint.** `study-room models kimi` calls `https://api.kimi.com/coding/v1/models`. That endpoint is not verified and is used only on explicit request.
 

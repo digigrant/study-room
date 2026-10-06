@@ -8,7 +8,7 @@ These items from SPEC section 26 need something only available on a real host. T
 
 | Gate | Built and tested hermetically | Still needed live | Open decision |
 | --- | --- | --- | --- |
-| Path-scoped Infisical permissions for `sbx-host` | Writes refused outside `/study-room/oauth/`; per-host paths; the `verify --live infisical` probe | Run the probe on the real project | Yes: see [Infisical scope](#infisical-scope) |
+| Infisical permissions for `sbx-host` | Writes limited to the configured OAuth secrets; per-installation entries; concurrent-host merge; the `verify --live infisical` check | Grant write, then run the check on the Agents project | Decided 2026-10-06: see [Infisical scope](#infisical-scope) |
 | OpenAI OAuth refresh and atomic rotation | PKCE flow, rotation, host lock, write-back and read-back, conflict detection, redaction | `study-room auth openai`, then a session lasting past one token expiry | |
 | Pin the OpenAI runtime and verification model IDs | Catalog listing, lock bump to `pinned`, `verify` refuses unpinned models | `study-room models openai`, choose, `study-room bump verification-model openai <id>` | Your model preference |
 | Hardened `web_fetch` | Full security contract, with local servers and a fake proxy | A fetch through the real sandbox proxy in both modes | Yes: see [DNS in `web` mode](#dns-in-web-mode) |
@@ -20,19 +20,18 @@ These items from SPEC section 26 need something only available on a real host. T
 
 ### Infisical scope
 
-SPEC 15.2 requires `sbx-host` to have read/write only on `/study-room/oauth/<provider>/<installation-id>`. On Infisical Cloud:
+**Decided by the captain on 2026-10-06.** The OpenAI token is kept in the existing Agents project, in the secret `OPENAI_REFRESH_TOKEN` the captain created. No Infisical Pro upgrade and no separate project.
 
-- **Additional privileges** (Pro plan and above) can grant `sbx-host` read, create and edit on `secretPath` glob `/study-room/oauth/**` while it stays Viewer elsewhere.
-- **Custom roles** with path conditions need a higher tier.
-- The **Free** plan offers only whole-project roles.
+Consequences:
 
-Options:
+- `sbx-host` needs write access in the Agents project. On the Free plan this is project-wide, because path-scoped grants need a paid plan. Study Room's client writes only the configured OAuth secrets.
+- One secret serves every host. Its value holds one entry per installation ID, so each host still rotates independently (SPEC 15.2).
 
-1. **Upgrade to Pro** and add the additional privilege. This keeps the spec's single shared project.
-2. **Use a separate Infisical project** for Study Room OAuth state, where `sbx-host` has write access. The agent project keeps `sbx-host` as Viewer. Enter that project's ID at setup's optional prompt. This departs from "reuse the existing project", so it needs approval.
-3. Use a separate machine identity for Study Room. This departs from "reuse `sbx-host`".
+Live steps:
 
-The code supports options 1 and 2 without changes. Until a decision is made, `study-room auth` must not be run against a broadened grant.
+1. Give `sbx-host` a role that can write in the Agents project's `dev` environment.
+2. Run `study-room verify --live infisical`. Expected: the GitHub token is readable, and `OPENAI_REFRESH_TOKEN` is readable and writable.
+3. Run `study-room auth openai`. If the secret currently holds a hand-entered value, confirm its replacement.
 
 ### DNS in `web` mode
 
@@ -48,7 +47,7 @@ Options:
 
 1. **Fresh host.** No Pi and no Obsidian installed. `study-room setup`. Expected: every change is listed before anything runs, and declining a required change stops setup with "permission declined". After the re-login, a second `study-room setup` reports "No host changes are needed."
 2. **Doctor.** `study-room doctor --host-only`. Expected: every line is `ok` except the live-check warnings.
-3. **Infisical scope.** `study-room verify --live infisical`. Expected: "inside: ok" and "outside: refused as required".
+3. **Infisical access.** `study-room verify --live infisical`. Expected: `GITHUB_GEJ_MACHINE_PAT` readable; `OPENAI_REFRESH_TOKEN` readable and writable.
 4. **Obsidian.** `study-room obsidian setup` against the existing remote vault. Expected: "Obsidian vault ready". The Windows vault directory is not used.
 5. **OpenAI.** `study-room auth openai`, then `study-room models openai`. Choose the runtime model (`config set profiles.main.model`) and pin the cheap verification model on a branch (`study-room bump verification-model openai <id>`).
 6. **Entry.** `study-room run`. Expected:
@@ -72,7 +71,7 @@ Options:
 12. **Remote Sync (one time, manual).** Create a note in `Study Room/` from Pi. Confirm it appears on a second Obsidian client (for example Windows), edit it there, and confirm the edit returns.
 13. **Refresh.** Leave a session open past the access-token lifetime. Expected:
     - requests keep working;
-    - the Infisical state's generation increments by exactly one per refresh;
+    - this host's entry in `OPENAI_REFRESH_TOKEN` increments its generation by exactly one per refresh, and the other host's entry is untouched;
     - two `study-room resolve openai` runs at once do not both refresh.
 14. **Drift.** `study-room check-updates --refresh` lists newer upstream versions without installing anything. The banner shows a concise warning.
 15. **Destroy.** `study-room destroy --yes`. Expected: the sandbox is gone; `Study Room/` and `~/.config/study-room/` are intact; the next `study-room run` recreates the sandbox.

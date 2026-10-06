@@ -2,27 +2,24 @@
 
 * Credentials (project ID, client ID, client secret) come from Study Room's
   own keyring namespace; they are sent only in request bodies over HTTPS.
-* Every operation logs in fresh with Universal Auth and discards the access
+* Every operation logs in fresh with Universal Auth and revokes the session
   token afterwards; nothing is cached on disk.
-* Study Room writes only below its own namespace,
-  ``/study-room/oauth/<provider>/<installation-id>``. The client refuses any
-  other write path, so even a broader grant on the identity is never used
-  for other paths. Whether Infisical enforces that scope server-side is a
-  separate, host-side permission question (SPEC 26).
+* Study Room writes only the provider OAuth secrets named in its
+  configuration. By the captain's decision of 2026-10-06 these live in the
+  existing Agents project (``OPENAI_REFRESH_TOKEN``, created by the captain;
+  ``KIMI_REFRESH_TOKEN`` for Kimi). The client refuses every other write, so
+  the identity's project-wide grant is never used for anything else.
 """
 
 from __future__ import annotations
 
-import re
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from . import redact
 from .errors import Failure, fail
 from .http import Client
 from .keyring import Keyring
-
-_SEGMENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 @dataclass(frozen=True)
@@ -30,42 +27,36 @@ class Handles:
     project_id: str
     client_id: str
     client_secret: str
-    oauth_project_id: str | None = None  # optional separate project for OAuth state
 
 
 def handles_from_keyring(keyring: Keyring, *, interactive: bool = False) -> Handles:
-    oauth_project = None
-    if keyring.item_state("infisical-oauth-project-id").state != "missing":
-        oauth_project = keyring.lookup("infisical-oauth-project-id", interactive=interactive)
     return Handles(
         project_id=keyring.lookup("infisical-project-id", interactive=interactive),
         client_id=keyring.lookup("infisical-client-id", interactive=interactive),
         client_secret=keyring.lookup("infisical-client-secret", interactive=interactive),
-        oauth_project_id=oauth_project,
     )
 
 
-def oauth_path(prefix: str, provider: str, installation_id: str) -> str:
-    for part in (provider, installation_id):
-        if not _SEGMENT.match(part):
-            raise fail(Failure.CONFIGURATION_INVALID, f"invalid Infisical path segment {part!r}")
-    prefix = "/" + prefix.strip("/")
-    return f"{prefix}/{provider}/{installation_id}"
-
-
 class Infisical:
-    def __init__(self, domain: str, environment: str, handles: Handles, client: Client | None = None, *, write_prefix: str = "/study-room/oauth"):
+    def __init__(
+        self,
+        domain: str,
+        environment: str,
+        handles: Handles,
+        client: Client | None = None,
+        *,
+        writable: set[tuple[str, str]] | frozenset[tuple[str, str]] = frozenset(),
+    ):
         if not domain.startswith("https://"):
             raise fail(Failure.CONFIGURATION_INVALID, "the Infisical domain must be an https:// URL")
         self.domain = domain.rstrip("/")
         self.environment = environment
         self.handles = handles
         self.client = client or Client(timeout=20)
-        self.write_prefix = "/" + write_prefix.strip("/")
+        self.writable = frozenset(writable)
         redact.register(handles.client_secret)
         redact.register(handles.client_id)
         redact.register(handles.project_id)
-        redact.register(handles.oauth_project_id)
 
     # --- auth ------------------------------------------------------------
     def _token(self) -> str:
@@ -94,21 +85,16 @@ class Infisical:
     def _auth(self, token: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {token}"}
 
-    def project_for(self, path: str) -> str:
-        """OAuth state may live in its own project; everything else uses the main one."""
-        in_prefix = path == self.write_prefix or path.startswith(self.write_prefix + "/")
-        return self.handles.oauth_project_id if in_prefix and self.handles.oauth_project_id else self.handles.project_id
-
-    def _check_write_path(self, path: str) -> None:
-        if not (path == self.write_prefix or path.startswith(self.write_prefix + "/")):
-            raise fail(Failure.CONFIGURATION_INVALID, f"refusing to write outside {self.write_prefix}: {path}")
+    def _check_write(self, path: str, name: str) -> None:
+        if (path, name) not in self.writable:
+            raise fail(Failure.CONFIGURATION_INVALID, f"refusing to write {path.rstrip('/')}/{name}: Study Room writes only its configured OAuth secrets")
 
     # --- secrets ---------------------------------------------------------
     def get(self, path: str, name: str, *, token: str | None = None) -> str | None:
         token = token or self._token()
         query = urllib.parse.urlencode(
             {
-                "projectId": self.project_for(path),
+                "projectId": self.handles.project_id,
                 "environment": self.environment,
                 "secretPath": path,
                 "viewSecretValue": "true",
@@ -120,7 +106,7 @@ class Infisical:
         if resp.status == 404:
             return None
         if resp.status in (401, 403):
-            raise fail(Failure.CREDENTIALS_NOT_CONFIGURED, f"the sbx-host identity may not read {path}/{name} ({resp.status})")
+            raise fail(Failure.CREDENTIALS_NOT_CONFIGURED, f"the sbx-host identity may not read {path.rstrip('/')}/{name} ({resp.status})")
         if not resp.ok:
             raise fail(Failure.EXTERNAL_SERVICE_UNAVAILABLE, f"Infisical read answered {resp.status}")
         data = resp.json()
@@ -130,31 +116,23 @@ class Infisical:
         redact.register(value)
         return value
 
-    def ensure_folders(self, path: str, *, token: str) -> None:
-        """Create ``path`` (inside the write prefix); missing parents are created by the same call.
-
-        Infisical checks the permission against the parent path, so an identity
-        scoped to the prefix can create the provider and installation folders
-        once an administrator has created the prefix itself.
-        """
-        self._check_write_path(path)
+    def ensure_folder(self, path: str, *, token: str) -> None:
+        """Create ``path`` and any missing parents (one call). The root always exists."""
+        if path == "/":
+            return
         parent, _, name = path.rstrip("/").rpartition("/")
         resp = self.client.request(
             "POST",
             f"{self.domain}/api/v2/folders",
-            json_body={"projectId": self.project_for(path), "environment": self.environment, "name": name, "path": parent or "/"},
+            json_body={"projectId": self.handles.project_id, "environment": self.environment, "name": name, "path": parent or "/"},
             headers=self._auth(token),
         )
         if resp.ok or (resp.status == 400 and "already exists" in resp.text().lower()):
             return
         if resp.status in (401, 403):
-            raise fail(
-                Failure.CREDENTIALS_NOT_CONFIGURED,
-                f"the sbx-host identity may not create {path} ({resp.status})",
-                hint=f"an Infisical administrator must create {self.write_prefix} and grant sbx-host access to it (docs/SETUP.md)",
-            )
+            raise fail(Failure.CREDENTIALS_NOT_CONFIGURED, f"the sbx-host identity may not create the folder {path} ({resp.status})")
         if resp.status == 404:
-            raise fail(Failure.CREDENTIALS_NOT_CONFIGURED, f"Infisical environment {self.environment!r} or a parent of {path} does not exist")
+            raise fail(Failure.CREDENTIALS_NOT_CONFIGURED, f"Infisical environment {self.environment!r} does not exist")
         raise fail(Failure.EXTERNAL_SERVICE_UNAVAILABLE, f"Infisical folder creation answered {resp.status}")
 
     def revoke(self, token: str) -> None:
@@ -166,23 +144,25 @@ class Infisical:
 
     def put(self, path: str, name: str, value: str, *, exists: bool, token: str | None = None) -> None:
         """Create or replace one secret value in a single request (atomic per value)."""
-        self._check_write_path(path)
+        self._check_write(path, name)
         token = token or self._token()
         redact.register(value)
-        body = {"projectId": self.project_for(path), "environment": self.environment, "secretPath": path, "secretValue": value, "type": "shared"}
+        body = {"projectId": self.handles.project_id, "environment": self.environment, "secretPath": path, "secretValue": value, "type": "shared"}
         url = f"{self.domain}/api/v4/secrets/{urllib.parse.quote(name, safe='')}"
         resp = self.client.request("PATCH" if exists else "POST", url, json_body=body, headers=self._auth(token))
         if not exists and resp.status == 404:
             # Create does not make folders: add the path, then retry once.
-            self.ensure_folders(path, token=token)
+            self.ensure_folder(path, token=token)
             resp = self.client.request("POST", url, json_body=body, headers=self._auth(token))
         if not exists and resp.status == 400 and "already exists" in resp.text().lower():
             resp = self.client.request("PATCH", url, json_body=body, headers=self._auth(token))
+        if exists and resp.status == 404:
+            resp = self.client.request("POST", url, json_body=body, headers=self._auth(token))
         if resp.status in (401, 403):
             raise fail(
                 Failure.CREDENTIALS_NOT_CONFIGURED,
-                f"the sbx-host identity may not write {path} ({resp.status})",
-                hint="grant sbx-host read/write on the Study Room path only (docs/SETUP.md, Infisical)",
+                f"the sbx-host identity may not write {path.rstrip('/')}/{name} ({resp.status})",
+                hint="sbx-host needs write access to the OAuth secret in the Agents project (docs/SETUP.md, Infisical)",
             )
         if resp.status == 429:
             raise fail(Failure.EXTERNAL_SERVICE_UNAVAILABLE, "Infisical rate-limited the write (429)")
@@ -192,8 +172,8 @@ class Infisical:
         if isinstance(data, dict) and "approval" in data and "secret" not in data:
             raise fail(
                 Failure.CONFIGURATION_INVALID,
-                f"Infisical queued the write to {path} for change approval instead of applying it",
-                hint="exclude the Study Room path from change-approval policies; rotated credentials must be written immediately",
+                f"Infisical queued the write to {name} for change approval instead of applying it",
+                hint="exclude the OAuth secret from change-approval policies; rotated credentials must be written immediately",
             )
 
     def session_token(self) -> str:
@@ -205,24 +185,25 @@ class FakeInfisical:
     """In-memory stand-in with the same interface, for hermetic tests."""
 
     values: dict[tuple[str, str], str]
+    writable: set[tuple[str, str]] = field(default_factory=lambda: {("/", "OPENAI_REFRESH_TOKEN"), ("/", "KIMI_REFRESH_TOKEN")})
     reads: int = 0
     writes: int = 0
     fail_writes: int = 0
-    write_prefix: str = "/study-room/oauth"
+    revoked: int = 0
 
     def session_token(self) -> str:
         return "fake-infisical-session"
 
     def revoke(self, token: str) -> None:
-        self.revoked = getattr(self, "revoked", 0) + 1
+        self.revoked += 1
 
     def get(self, path: str, name: str, *, token: str | None = None) -> str | None:
         self.reads += 1
         return self.values.get((path, name))
 
     def put(self, path: str, name: str, value: str, *, exists: bool, token: str | None = None) -> None:
-        if not path.startswith(self.write_prefix):
-            raise fail(Failure.CONFIGURATION_INVALID, f"refusing to write outside {self.write_prefix}: {path}")
+        if (path, name) not in self.writable:
+            raise fail(Failure.CONFIGURATION_INVALID, f"refusing to write {path}/{name}")
         if self.fail_writes:
             self.fail_writes -= 1
             raise fail(Failure.EXTERNAL_SERVICE_UNAVAILABLE, "fake Infisical write failure")

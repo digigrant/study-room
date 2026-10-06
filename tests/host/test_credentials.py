@@ -12,10 +12,10 @@ from contextlib import redirect_stderr, redirect_stdout
 from studyroom import cli, redact
 from studyroom.errors import Failure, StudyRoomError
 from studyroom.http import Client, FakeTransport, Response, json_response
-from studyroom.infisical import FakeInfisical, Handles, Infisical, oauth_path
+from studyroom.infisical import FakeInfisical, Handles, Infisical
 from studyroom.keyring import Keyring, _parse_search_items
 from studyroom.oauth import kimi, openai
-from studyroom.oauth.state import OAuthState, parse
+from studyroom.oauth.state import OAuthState, dump_document, empty_document, entry, parse, parse_document, with_entry
 from studyroom.resolver import OAuthLocation, Resolver
 from studyroom.runner import FakeRunner, Result
 
@@ -170,19 +170,23 @@ class KeyringTests(TempHome):
         self.assertEqual(ctx.exception.failure, Failure.CREDENTIALS_NOT_CONFIGURED)
 
 
+OPENAI_SECRET = ("/", "OPENAI_REFRESH_TOKEN")
+
+
 class InfisicalTests(TempHome):
     def client(self, t: FakeTransport) -> Infisical:
         t.on("POST", "https://app.infisical.com/api/v1/auth/universal-auth/login", json_response({"accessToken": "inf-session-FAKE-1", "expiresIn": 300, "tokenType": "Bearer"}))
-        return Infisical("https://app.infisical.com", "dev", Handles("proj-FAKE-1", "client-FAKE-1", FAKE_CLIENT_SECRET), Client(t))
+        return Infisical("https://app.infisical.com", "dev", Handles("proj-FAKE-1", "client-FAKE-1", FAKE_CLIENT_SECRET), Client(t), writable={OPENAI_SECRET})
 
     def test_read_never_expands_references_and_keeps_secrets_out_of_urls(self) -> None:
         t = FakeTransport()
         inf = self.client(t)
-        t.on("GET", "https://app.infisical.com/api/v4/secrets/OAUTH_STATE", json_response({"secret": {"secretValue": '{"x":1}', "version": 3}}))
-        self.assertEqual(inf.get("/study-room/oauth/openai/" + INSTALL, "OAUTH_STATE"), '{"x":1}')
+        t.on("GET", "https://app.infisical.com/api/v4/secrets/OPENAI_REFRESH_TOKEN", json_response({"secret": {"secretValue": '{"x":1}', "version": 3}}))
+        self.assertEqual(inf.get(*OPENAI_SECRET), '{"x":1}')
         login, read = t.requests
         self.assertEqual(json.loads(login.body), {"clientId": "client-FAKE-1", "clientSecret": FAKE_CLIENT_SECRET})
         self.assertIn("expandSecretReferences=false", read.url)
+        self.assertIn("projectId=proj-FAKE-1", read.url)
         self.assertNotIn(FAKE_CLIENT_SECRET, read.url)
         self.assertEqual(read.headers["Authorization"], "Bearer inf-session-FAKE-1")
 
@@ -190,77 +194,94 @@ class InfisicalTests(TempHome):
         t = FakeTransport()
         inf = self.client(t)
         t.on("GET", "https://app.infisical.com/api/v4/secrets/", Response(404, b'{"message":"Secret not found"}'))
-        self.assertIsNone(inf.get("/study-room/oauth/openai/x", "OAUTH_STATE"))
+        self.assertIsNone(inf.get(*OPENAI_SECRET))
         t.on("GET", "https://app.infisical.com/api/v4/secrets/", Response(403, b"{}"))
         with self.assertRaises(StudyRoomError) as ctx:
-            inf.get("/study-room/oauth/openai/x", "OAUTH_STATE")
+            inf.get(*OPENAI_SECRET)
         self.assertEqual(ctx.exception.failure, Failure.CREDENTIALS_NOT_CONFIGURED)
 
-    def test_create_makes_the_folder_on_404_then_retries(self) -> None:
+    def test_update_patches_the_existing_secret_in_one_request(self) -> None:
         t = FakeTransport()
         inf = self.client(t)
-        posts: list[int] = []
+        t.on("PATCH", "https://app.infisical.com/api/v4/secrets/OPENAI_REFRESH_TOKEN", json_response({"secret": {"version": 4}}))
+        inf.put(*OPENAI_SECRET, '{"v":2}', exists=True)
+        patch = next(r for r in t.requests if r.method == "PATCH")
+        body = json.loads(patch.body)
+        self.assertEqual((body["secretPath"], body["secretValue"], body["projectId"], body["environment"]), ("/", '{"v":2}', "proj-FAKE-1", "dev"))
 
-        def create(req):
-            posts.append(1)
-            return Response(404, b'{"message":"Folder not found"}') if len(posts) == 1 else json_response({"secret": {"version": 1}})
+    def test_create_when_missing(self) -> None:
+        t = FakeTransport()
+        inf = self.client(t)
+        t.on("POST", "https://app.infisical.com/api/v4/secrets/OPENAI_REFRESH_TOKEN", json_response({"secret": {"version": 1}}))
+        inf.put(*OPENAI_SECRET, '{"v":1}', exists=False)
+        self.assertEqual([r.method for r in t.requests], ["POST", "POST"])
 
-        t.on("POST", "https://app.infisical.com/api/v4/secrets/OAUTH_STATE", create)
-        t.on("POST", "https://app.infisical.com/api/v2/folders", json_response({"folder": {"id": "f"}}))
-        path = oauth_path("/study-room/oauth", "openai", INSTALL)
-        inf.put(path, "OAUTH_STATE", '{"v":1}', exists=False)
-        folder = next(r for r in t.requests if r.url.endswith("/api/v2/folders"))
-        self.assertEqual(json.loads(folder.body)["path"], "/study-room/oauth/openai")
-        self.assertEqual(json.loads(folder.body)["name"], INSTALL)
-        self.assertEqual(len(posts), 2)
-
-    def test_refuses_writes_outside_the_study_room_namespace(self) -> None:
+    def test_refuses_writes_to_anything_but_the_configured_oauth_secrets(self) -> None:
         inf = self.client(FakeTransport())
-        for path in ("/", "/agents", "/study-room", "/study-room/oauthx"):
+        for path, name in (("/", "GITHUB_GEJ_MACHINE_PAT"), ("/", "CLAUDE_CODE_OAUTH_TOKEN"), ("/other", "OPENAI_REFRESH_TOKEN"), ("/", "KIMI_REFRESH_TOKEN")):
             with self.assertRaises(StudyRoomError):
-                inf.put(path, "X", "v", exists=True)
+                inf.put(path, name, "v", exists=True)
 
     def test_change_approval_is_not_a_write(self) -> None:
         t = FakeTransport()
         inf = self.client(t)
-        t.on("PATCH", "https://app.infisical.com/api/v4/secrets/OAUTH_STATE", json_response({"approval": {"id": "a"}}))
+        t.on("PATCH", "https://app.infisical.com/api/v4/secrets/OPENAI_REFRESH_TOKEN", json_response({"approval": {"id": "a"}}))
         with self.assertRaises(StudyRoomError):
-            inf.put("/study-room/oauth/openai/x", "OAUTH_STATE", "v", exists=True)
+            inf.put(*OPENAI_SECRET, "v", exists=True)
 
-    def test_paths_are_validated(self) -> None:
-        self.assertEqual(oauth_path("study-room/oauth/", "openai", INSTALL), f"/study-room/oauth/openai/{INSTALL}")
-        for bad in ("../x", "a/b", ""):
-            with self.assertRaises(StudyRoomError):
-                oauth_path("/study-room/oauth", bad, INSTALL)
+
+class DocumentTests(TempHome):
+    def test_entries_are_per_installation(self) -> None:
+        doc = with_entry(empty_document("openai"), state())
+        other = state(installation_id="0b7d4c2a-1111-4c2e-9b1f-0c5d8e2a4f62", access="other-access-FAKE-01", refresh="other-refresh-FAKE-01")
+        doc = with_entry(doc, other)
+        parsed, foreign = parse_document(dump_document(doc), "openai")
+        self.assertFalse(foreign)
+        self.assertEqual(entry(parsed, "openai", INSTALL).refresh, FAKE_REFRESH)
+        self.assertEqual(entry(parsed, "openai", other.installation_id).refresh, "other-refresh-FAKE-01")
+        self.assertIsNone(entry(parsed, "openai", "a1b2c3d4-0000-4000-8000-000000000000"))
+
+    def test_blank_values_are_fresh_and_foreign_values_are_flagged(self) -> None:
+        self.assertEqual(parse_document(None, "openai"), (empty_document("openai"), False))
+        self.assertEqual(parse_document("  ", "openai"), (empty_document("openai"), False))
+        for foreign in ("rt_FAKE_bare_refresh_token_pasted_by_hand", '{"some":"json"}', dump_document(empty_document("kimi"))):
+            self.assertTrue(parse_document(foreign, "openai")[1], foreign)
+        self.assertNotIn("rt_FAKE_bare_refresh_token_pasted_by_hand", redact.redact_text("value rt_FAKE_bare_refresh_token_pasted_by_hand"))
+
+
+OTHER_INSTALL = "0b7d4c2a-1111-4c2e-9b1f-0c5d8e2a4f62"
 
 
 class ResolverTests(TempHome):
     def setUp(self) -> None:
         super().setUp()
-        self.path = oauth_path("/study-room/oauth", "openai", INSTALL)
         self.store = FakeInfisical({})
         self.refresh_calls = 0
 
-    def resolver(self, **kw) -> Resolver:
+    def resolver(self, installation: str = INSTALL, **kw) -> Resolver:
         def refresher(_client, st: OAuthState) -> OAuthState:
             self.refresh_calls += 1
-            return st.rotated(f"rotated-access-FAKE-{st.generation + 1:04d}", f"rotated-refresh-FAKE-{st.generation + 1:04d}", int((NOW + 7200) * 1000), int(NOW * 1000))
+            tag = "A" if st.installation_id == INSTALL else "B"
+            return st.rotated(f"rotated-access-FAKE-{tag}{st.generation + 1:04d}", f"rotated-refresh-FAKE-{tag}{st.generation + 1:04d}", int((NOW + 7200) * 1000), int(NOW * 1000))
 
         return Resolver(
             self.store,
             self.paths,
-            INSTALL,
-            {"openai": OAuthLocation(self.path, "OAUTH_STATE")},
+            installation,
+            {"openai": OAuthLocation(*OPENAI_SECRET)},
             refreshers={"openai": kw.get("refresher", refresher)},
             clock=lambda: NOW,
-            sleep=lambda s: None,
+            sleep=kw.get("sleep", lambda s: None),
         )
 
-    def put(self, st: OAuthState) -> None:
-        self.store.values[(self.path, "OAUTH_STATE")] = st.to_json()
+    def put(self, *states: OAuthState) -> None:
+        doc = empty_document("openai")
+        for st in states:
+            doc = with_entry(doc, st)
+        self.store.values[OPENAI_SECRET] = dump_document(doc)
 
-    def stored(self) -> OAuthState:
-        return parse(self.store.values[(self.path, "OAUTH_STATE")], provider="openai", installation_id=INSTALL)
+    def stored(self, installation: str = INSTALL) -> OAuthState:
+        return entry(parse_document(self.store.values[OPENAI_SECRET], "openai")[0], "openai", installation)
 
     def test_valid_token_needs_no_refresh(self) -> None:
         self.put(state())
@@ -272,12 +293,55 @@ class ResolverTests(TempHome):
     def test_near_expiry_rotates_and_writes_back_before_returning(self) -> None:
         self.put(state(expires_ms=int((NOW + 60) * 1000)))
         token = self.resolver().access_token("openai")
-        self.assertEqual(token, "rotated-access-FAKE-0002")
+        self.assertEqual(token, "rotated-access-FAKE-A0002")
         st = self.stored()
-        self.assertEqual((st.refresh, st.generation), ("rotated-refresh-FAKE-0002", 2))
+        self.assertEqual((st.refresh, st.generation), ("rotated-refresh-FAKE-A0002", 2))
         self.assertEqual(self.store.writes, 1)
 
-    def test_concurrent_resolvers_spend_the_refresh_token_once(self) -> None:
+    def test_hosts_sharing_the_secret_rotate_only_their_own_entry(self) -> None:
+        other = state(installation_id=OTHER_INSTALL, access="b-access-FAKE-0001", refresh="b-refresh-FAKE-0001", expires_ms=int((NOW + 60) * 1000))
+        self.put(state(expires_ms=int((NOW + 60) * 1000)), other)
+        self.assertEqual(self.resolver().access_token("openai"), "rotated-access-FAKE-A0002")
+        self.assertEqual(self.stored(OTHER_INSTALL).refresh, "b-refresh-FAKE-0001", "host A left host B's entry alone")
+        self.assertEqual(self.resolver(OTHER_INSTALL).access_token("openai"), "rotated-access-FAKE-B0002")
+        self.assertEqual(self.stored().refresh, "rotated-refresh-FAKE-A0002", "host B left host A's rotated entry alone")
+        self.assertEqual(self.stored(OTHER_INSTALL).refresh, "rotated-refresh-FAKE-B0002")
+
+    def test_a_concurrent_write_from_another_host_is_merged_again(self) -> None:
+        other = state(installation_id=OTHER_INSTALL, access="b-access-FAKE-0001", refresh="b-refresh-FAKE-0001")
+        self.put(state(expires_ms=int((NOW + 60) * 1000)), other)
+        stale = self.store.values[OPENAI_SECRET]  # host B read this before our write
+        original_put = self.store.put
+        raced = []
+
+        def racing_put(path, name, value, *, exists, token=None):
+            original_put(path, name, value, exists=exists, token=token)
+            if not raced:
+                raced.append(1)
+                doc = parse_document(stale, "openai")[0]
+                b = entry(doc, "openai", OTHER_INSTALL)
+                doc = with_entry(doc, b.rotated("b-access-FAKE-0002", "b-refresh-FAKE-0002", 1, 1))
+                original_put(path, name, dump_document(doc), exists=True)  # B's write drops our new entry
+
+        self.store.put = racing_put  # type: ignore[assignment]
+        self.assertEqual(self.resolver().access_token("openai"), "rotated-access-FAKE-A0002")
+        self.assertEqual(self.stored().refresh, "rotated-refresh-FAKE-A0002", "our rotated entry was merged back")
+        self.assertEqual(self.stored(OTHER_INSTALL).refresh, "b-refresh-FAKE-0002", "and host B's rotation was kept")
+
+    def test_late_clobbering_is_caught_by_the_settled_read_back(self) -> None:
+        self.put(state(expires_ms=int((NOW + 60) * 1000)))
+        stale = self.store.values[OPENAI_SECRET]
+        clobbered = []
+
+        def sleep(_s: float) -> None:
+            if not clobbered:
+                clobbered.append(1)
+                self.store.values[OPENAI_SECRET] = stale  # another host's write lands after our first check
+
+        self.assertEqual(self.resolver(sleep=sleep).access_token("openai"), "rotated-access-FAKE-A0002")
+        self.assertEqual(self.stored().generation, 2)
+
+    def test_concurrent_resolvers_on_one_host_spend_the_refresh_token_once(self) -> None:
         self.put(state(expires_ms=int((NOW + 60) * 1000)))
         barrier = threading.Barrier(4)
         results: list[str] = []
@@ -302,7 +366,7 @@ class ResolverTests(TempHome):
     def test_transient_write_failures_are_retried(self) -> None:
         self.put(state(expires_ms=int((NOW + 60) * 1000)))
         self.store.fail_writes = 2
-        self.assertEqual(self.resolver().access_token("openai"), "rotated-access-FAKE-0002")
+        self.assertEqual(self.resolver().access_token("openai"), "rotated-access-FAKE-A0002")
         self.assertEqual(self.stored().generation, 2)
 
     def test_persistent_write_failure_is_explicit(self) -> None:
@@ -312,33 +376,51 @@ class ResolverTests(TempHome):
             self.resolver().access_token("openai")
         self.assertEqual(ctx.exception.failure, Failure.EXTERNAL_SERVICE_UNAVAILABLE)
         self.assertIn("study-room auth openai", ctx.exception.hint or "")
-        self.assertNotIn("rotated-refresh-FAKE-0002", ctx.exception.render())
+        self.assertNotIn("rotated-refresh-FAKE-A0002", ctx.exception.render())
 
-    def test_conflicting_writer_is_detected(self) -> None:
+    def test_persistent_conflict_is_reported(self) -> None:
         self.put(state(expires_ms=int((NOW + 60) * 1000)))
+        stale = self.store.values[OPENAI_SECRET]
         original_put = self.store.put
 
-        def racing_put(path, name, value, *, exists, token=None):
+        def always_clobbered(path, name, value, *, exists, token=None):
             original_put(path, name, value, exists=exists, token=token)
-            other = parse(value, provider="openai", installation_id=INSTALL)
-            original_put(path, name, other.rotated("x" * 20, "someone-elses-refresh-FAKE", 1, 1).to_json(), exists=True)
+            original_put(path, name, stale, exists=True)
 
-        self.store.put = racing_put  # type: ignore[assignment]
+        self.store.put = always_clobbered  # type: ignore[assignment]
         with self.assertRaises(StudyRoomError) as ctx:
             self.resolver().access_token("openai")
         self.assertEqual(ctx.exception.failure, Failure.REFRESH_CONFLICT)
 
-    def test_missing_state_asks_for_authorization(self) -> None:
+    def test_missing_entry_asks_for_authorization(self) -> None:
         with self.assertRaises(StudyRoomError) as ctx:
             self.resolver().access_token("openai")
         self.assertEqual(ctx.exception.failure, Failure.CREDENTIALS_NOT_CONFIGURED)
         self.assertIn("study-room auth openai", ctx.exception.hint or "")
+        self.put(state(installation_id=OTHER_INSTALL))
+        with self.assertRaises(StudyRoomError):
+            self.resolver().access_token("openai")
+
+    def test_a_foreign_value_is_never_used_or_silently_replaced(self) -> None:
+        self.store.values[OPENAI_SECRET] = "rt_FAKE_value_the_captain_pasted"
+        with self.assertRaises(StudyRoomError) as ctx:
+            self.resolver().access_token("openai")
+        self.assertIn("did not write", ctx.exception.message)
+        with self.assertRaises(StudyRoomError) as ctx2:
+            self.resolver().save_new(state(), replace_foreign=lambda: False)
+        self.assertEqual(ctx2.exception.failure, Failure.PERMISSION_DECLINED)
+        self.assertEqual(self.store.values[OPENAI_SECRET], "rt_FAKE_value_the_captain_pasted")
+        self.resolver().save_new(state(), replace_foreign=lambda: True)
+        self.assertEqual(self.stored().refresh, FAKE_REFRESH)
+
+    def test_an_empty_secret_is_filled_without_asking(self) -> None:
+        self.store.values[OPENAI_SECRET] = ""
+        self.resolver().save_new(state(), replace_foreign=lambda: self.fail("must not ask"))
+        self.assertEqual(self.stored().generation, 1)
 
     def test_save_new_increments_generation(self) -> None:
         self.put(state(generation=5))
-        r = self.resolver()
-        fresh = state(access="fresh-access-FAKE-0009", refresh="fresh-refresh-FAKE-0009")
-        r.save_new(fresh)
+        self.resolver().save_new(state(access="fresh-access-FAKE-0009", refresh="fresh-refresh-FAKE-0009"))
         self.assertEqual(self.stored().generation, 6)
 
 
@@ -361,9 +443,8 @@ class ResolveCommandTests(TempHome):
         self.assertEqual((code, out, err), (0, FAKE_PAT + "\n", ""))
 
     def test_openai_value_only(self) -> None:
-        path = oauth_path("/study-room/oauth", "openai", INSTALL)
         far = state(expires_ms=int((time.time() + 86400) * 1000))
-        store = FakeInfisical({(path, "OAUTH_STATE"): far.to_json()})
+        store = FakeInfisical({OPENAI_SECRET: dump_document(with_entry(empty_document("openai"), far))})
         code, out, err = self.run_resolve("openai", store)
         self.assertEqual((code, out, err), (0, FAKE_ACCESS + "\n", ""))
 
@@ -380,16 +461,3 @@ class ResolveCommandTests(TempHome):
         self.assertNotEqual(code, 0)
         self.assertEqual(out, "")
         self.assertIn("disabled", err)
-
-
-class SeparateProjectTests(TempHome):
-    def test_oauth_state_can_live_in_its_own_project(self) -> None:
-        t = FakeTransport()
-        t.on("POST", "https://app.infisical.com/api/v1/auth/universal-auth/login", json_response({"accessToken": "inf-session-FAKE-2"}))
-        t.on("GET", "https://app.infisical.com/api/v4/secrets/", json_response({"secret": {"secretValue": "v"}}))
-        inf = Infisical("https://app.infisical.com", "dev", Handles("agents-proj", "cid", FAKE_CLIENT_SECRET, oauth_project_id="study-room-proj"), Client(t))
-        inf.get("/", "GITHUB_GEJ_MACHINE_PAT")
-        inf.get(oauth_path("/study-room/oauth", "openai", INSTALL), "OAUTH_STATE")
-        reads = [r.url for r in t.requests if "/api/v4/secrets/" in r.url]
-        self.assertIn("projectId=agents-proj", reads[0])
-        self.assertIn("projectId=study-room-proj", reads[1])

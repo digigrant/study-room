@@ -67,26 +67,29 @@ When a change only takes effect in a new session (group membership, a new keyrin
 After the host changes, setup walks through the interactive steps:
 
 1. **Docker sign-in**: `sbx login`.
-2. **Infisical handles**: paste the project ID, the `sbx-host` client ID, and the client secret for this machine. Input is hidden and goes straight into the Secret Service under the `study-room` namespace; it is never written to a file. Optionally give a separate project ID for Study Room's OAuth state (see below). Setup then checks it can read the `gej-machine` token and prints only its length and shape.
+2. **Infisical handles**: paste the project ID, the `sbx-host` client ID, and the client secret for this machine. Input is hidden and goes straight into the Secret Service under the `study-room` namespace; it is never written to a file. Setup then checks it can read the `gej-machine` token and prints only its length and shape.
 3. **Obsidian**: see [step 6](#6-obsidian-sync-onboarding).
-4. **OpenAI**: `study-room auth openai` opens "Sign in with ChatGPT" in your browser. The resulting authorization (access token, refresh token, expiry, issued client) is stored in Infisical at `/study-room/oauth/openai/<installation-id>`, for this host only.
+4. **OpenAI**: `study-room auth openai` opens "Sign in with ChatGPT" in your browser. The resulting authorization (access token, refresh token, expiry, issued client) is stored in the `OPENAI_REFRESH_TOKEN` secret of the Agents Infisical project, as this host's entry (keyed by its installation ID). If that secret holds a value Study Room did not write, `auth` asks before replacing it.
 
 ## 5. Infisical access
 
-Study Room reads the existing `GITHUB_GEJ_MACHINE_PAT` secret and writes provider OAuth state only under `/study-room/oauth/`. An Infisical administrator must:
+Study Room uses the existing Agents project and the `sbx-host` identity:
 
-1. create the folder `/study-room/oauth` in the `dev` environment (Infisical checks folder-creation rights on the parent, so the identity cannot create the top folder itself);
-2. give `sbx-host` read and write access to `/study-room/oauth/**` and nothing broader.
+- it reads `GITHUB_GEJ_MACHINE_PAT` (environment `dev`, path `/`);
+- it reads and writes `OPENAI_REFRESH_TOKEN` (same environment and path), which the captain created for this purpose;
+- it reads and writes `KIMI_REFRESH_TOKEN` only once Kimi is enabled (created on first `study-room auth kimi` if it does not exist).
 
-Infisical offers path-scoped access through additional privileges (Pro plan) or custom roles (higher tiers). On the Free plan only whole-project roles exist. In that case keep the OAuth state in a separate project that `sbx-host` may write, and enter its ID at the optional prompt. Which option to use is an open decision: see [Live acceptance](ACCEPTANCE.md#gates).
+`sbx-host` therefore needs write access in the Agents project. The captain decided on 2026-10-06 to keep the token there rather than buy path-scoped permissions or create another project. Study Room's own client refuses to write any secret other than the OAuth secrets named in its configuration (`infisical.oauth_secrets`).
 
-Check the result with:
+Several hosts can share the secret. Its value is a JSON document with one entry per installation ID. Each host rotates only its own entry, so WSL2 and native Ubuntu never spend each other's refresh tokens.
+
+Check access with:
 
 ```bash
 study-room verify --live infisical
 ```
 
-It writes and deletes a probe inside the Study Room path, and confirms that a write outside it is refused.
+It reads the GitHub token (showing only its length) and the OAuth secret, and writes the OAuth secret's current value back unchanged to prove write access.
 
 ## 6. Obsidian Sync onboarding
 

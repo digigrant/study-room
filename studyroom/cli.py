@@ -37,7 +37,7 @@ from . import (
 )
 from .errors import Failure, StudyRoomError, fail
 from .http import Client
-from .infisical import Infisical, handles_from_keyring, oauth_path
+from .infisical import Infisical, handles_from_keyring
 from .keyring import Keyring
 from .oauth import kimi as kimi_oauth
 from .oauth import openai as openai_oauth
@@ -70,16 +70,18 @@ class Context:
     def keyring(self) -> Keyring:
         return Keyring(self.runner)
 
+    def oauth_locations(self) -> dict[str, OAuthLocation]:
+        secrets = self.config().data["infisical"]["oauth_secrets"]
+        return {p: OAuthLocation(secrets[p]["path"], secrets[p]["name"]) for p in PROVIDERS}
+
     def infisical(self, *, interactive: bool = False) -> Infisical:
-        cfg = self.config()
-        inf = cfg.data["infisical"]
-        return Infisical(inf["domain"], inf["environment"], handles_from_keyring(self.keyring(), interactive=interactive), write_prefix=inf["oauth_path_prefix"])
+        inf = self.config().data["infisical"]
+        writable = {(loc.path, loc.name) for loc in self.oauth_locations().values()}
+        return Infisical(inf["domain"], inf["environment"], handles_from_keyring(self.keyring(), interactive=interactive), writable=writable)
 
     def resolver(self, *, interactive: bool = False) -> Resolver:
         cfg = self.config()
-        inf = cfg.data["infisical"]
-        locations = {p: OAuthLocation(oauth_path(inf["oauth_path_prefix"], p, cfg.installation_id), inf["oauth_secret_name"]) for p in PROVIDERS}
-        return Resolver(self.infisical(interactive=interactive), self.paths, cfg.installation_id, locations)
+        return Resolver(self.infisical(interactive=interactive), self.paths, cfg.installation_id, self.oauth_locations())
 
 
 # ── interaction helpers ────────────────────────────────────────────────────
@@ -204,9 +206,6 @@ def infisical_ceremony(ctx: Context) -> None:
             if not value:
                 raise fail(Failure.PERMISSION_DECLINED, f"no value entered for {key}")
             kr.store(key, value)
-        separate = getpass.getpass("Optional: a separate Infisical project ID for Study Room OAuth state (Enter = same project): ").strip()
-        if separate:
-            kr.store("infisical-oauth-project-id", separate)
     inf = ctx.infisical(interactive=True)
     cfg = ctx.config()
     pat = read_github_pat(inf, cfg.data["infisical"]["github_secret_path"], cfg.data["infisical"]["github_secret_name"])
@@ -250,8 +249,13 @@ def cmd_auth(ctx: Context, args) -> int:
         state = openai_oauth.login(client, cfg.installation_id, say=say, open_browser=open_browser, ask=ask)
     else:
         state = kimi_oauth.login(client, cfg.installation_id, say=say, open_browser=open_browser)
-    resolver.save_new(state)
-    say(f"Authorized: {state.describe()}. Stored in Infisical for this host only; the sandbox will see a placeholder.")
+    name = ctx.oauth_locations()[provider].name
+
+    def replace_foreign() -> bool:
+        return ask_yes(f"The Infisical secret {name} holds a value Study Room did not write. Replace it with Study Room's authorization state?")
+
+    resolver.save_new(state, replace_foreign=replace_foreign)
+    say(f"Authorized: {state.describe()}. Stored in Infisical secret {name} under this host's installation ID; the sandbox will see a placeholder.")
     if provider == "kimi" and not cfg.provider_enabled("kimi"):
         say("Kimi stays disabled and experimental. Enable it explicitly with `study-room config set providers.kimi.enabled true` after its live checks.")
     return 0
@@ -396,7 +400,7 @@ def cmd_verify(ctx: Context, args) -> int:
     components = args.components or ["provider"]
     if "infisical" in components:
         components = [c for c in components if c != "infisical"]
-        verify_infisical_scope(ctx)
+        verify_infisical_access(ctx)
         if not components:
             return 0
     sbx = Sbx(ctx.runner, cfg.sandbox_name)
@@ -413,38 +417,32 @@ def cmd_verify(ctx: Context, args) -> int:
     return 1 if "failed" in results.values() else 0
 
 
-def verify_infisical_scope(ctx: Context) -> None:
-    """Live gate (SPEC 26): can sbx-host write the Study Room path, and nothing outside it?"""
-    import uuid
-
+def verify_infisical_access(ctx: Context) -> None:
+    """Live gate (SPEC 26): can sbx-host read the GitHub token and read and write the OAuth secrets?"""
     cfg = ctx.config()
     inf = ctx.infisical(interactive=True)
-    inside = oauth_path(cfg.data["infisical"]["oauth_path_prefix"], "probe", cfg.installation_id)
+    locations = {p: loc for p, loc in ctx.oauth_locations().items() if cfg.provider_enabled(p)}
     lines = [
-        "Infisical scope probe (no provider requests):",
-        f"  1. write and delete a probe secret at {inside}",
-        "  2. try to write a probe secret at /study-room-scope-probe (outside the Study Room path); this MUST be refused",
+        "Infisical access check (no provider requests):",
+        f"  1. read {cfg.data['infisical']['github_secret_name']} (only its length and shape are shown)",
+        *[f"  2. read {loc.name} and write its current value back unchanged ({p})" for p, loc in locations.items()],
+        "  Per the captain's decision of 2026-10-06, sbx-host writes these secrets in the Agents project;",
+        "  Study Room's client refuses to write any other secret.",
     ]
     if not typed_confirmation(lines):
-        raise fail(Failure.PERMISSION_DECLINED, "Infisical probe not confirmed")
+        raise fail(Failure.PERMISSION_DECLINED, "Infisical check not confirmed")
     token = inf.session_token()
-    name = f"SCOPE_PROBE_{uuid.uuid4().hex[:8].upper()}"
-    base = {"projectId": inf.project_for(inside), "environment": inf.environment, "type": "shared"}
     try:
-        inf.put(inside, name, "probe", exists=False, token=token)
-        ctx_client = inf.client
-        ctx_client.request("DELETE", f"{inf.domain}/api/v4/secrets/{name}", json_body={**base, "secretPath": inside}, headers={"Authorization": f"Bearer {token}"})
-        say(f"  inside: ok (wrote and deleted {inside}/{name})")
-        outside = {**base, "projectId": inf.handles.project_id}
-        resp = ctx_client.request("POST", f"{inf.domain}/api/v4/secrets/{name}", json_body={**outside, "secretPath": "/", "secretValue": "probe"}, headers={"Authorization": f"Bearer {token}"})
-        if resp.ok:
-            ctx_client.request("DELETE", f"{inf.domain}/api/v4/secrets/{name}", json_body={**outside, "secretPath": "/"}, headers={"Authorization": f"Bearer {token}"})
-            raise fail(
-                Failure.CONFIGURATION_INVALID,
-                "sbx-host could write outside the Study Room path (the probe was deleted again)",
-                hint="SPEC 15.2 requires path-scoped access; narrow the identity's permissions before storing OAuth state",
-            )
-        say(f"  outside: refused as required ({resp.status})")
+        pat = inf.get(cfg.data["infisical"]["github_secret_path"], cfg.data["infisical"]["github_secret_name"], token=token)
+        say(f"  github token: {'readable (' + str(len(pat)) + ' chars)' if pat else 'MISSING'}")
+        for provider, loc in locations.items():
+            value = inf.get(loc.path, loc.name, token=token)
+            if value is None:
+                say(f"  {loc.name}: does not exist yet; `study-room auth {provider}` creates it")
+                continue
+            inf.put(loc.path, loc.name, value, exists=True, token=token)
+            same = inf.get(loc.path, loc.name, token=token) == value
+            say(f"  {loc.name}: readable and writable{'' if same else ' (WARNING: the value changed between write and read)'}")
     finally:
         inf.revoke(token)
 
