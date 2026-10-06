@@ -100,7 +100,8 @@ The check:
   - by address. The sandbox's own deny rule for `10.0.0.0/8` usually answers first with a 403, and the step is then reported as skipped; it passes only if the request reached the guard and the guard rejected it;
 - confirms the sandbox still reaches `api.github.com`;
 - shows that `tailscaled` and the Magic Conch hub run outside the daemon's unit, and that Tailscale and the hub's session port keep working;
-- with `--tailscale-peer`, connects to that peer from the host, then checks that the guard rejects the sandbox's request to it through `<a-b-c-d>.sslip.io`, a public name that resolves to the peer's address. Like the test-address name, this step passes only if the guard's rejection counter rises. It is skipped if that name does not resolve to the peer, for example when the peer is not given as an IPv4 address.
+- with `--tailscale-peer`, connects to that peer from the host, then checks that the guard rejects the sandbox's request to it through `<a-b-c-d>.sslip.io`, a public name that resolves to the peer's address. Like the test-address name, this step passes only if the guard's rejection counter rises. It is skipped if that name does not resolve to the peer, for example when the peer is not given as an IPv4 address;
+- reports `guard_exercised`, which fails, and fails the whole check, unless at least one of these sandbox requests was rejected by the guard. For example, if the host's resolver drops `sslip.io` answers that point at private addresses (DNS-rebinding protection on some routers and Pi-hole), nothing proves the guard, and the check fails rather than passing.
 
 Everything temporary is removed afterwards.
 

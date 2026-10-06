@@ -270,6 +270,7 @@ class LiveVerifyTests(TempHome):
         self.assertEqual(out["sandbox_tailscale_peer"], "passed")
         self.assertEqual(out["hub_cgroup"], "passed")
         self.assertEqual(out["hub_session_port"], "passed")
+        self.assertEqual(out["guard_exercised"], "passed")
         allows = [e for e in self.events if e.startswith("policy allow network")]
         removes = [e for e in self.events if e.startswith("policy rm network")]
         self.assertEqual(len(allows), 3)
@@ -328,6 +329,13 @@ class LiveVerifyTests(TempHome):
         out, _ = self.verify()
         self.assertEqual(out["sandbox_private_literal"], "passed")
         self.assertEqual(out["sandbox_private_hostname"], "failed", "a 502 without a guard rejection is not the guard")
+
+    def test_a_run_where_no_request_reaches_the_guard_fails(self) -> None:
+        self.runner.on(["sbx", "exec"], lambda argv, _i: Result(argv, 0, "200" if "api.github.com" in argv[-1] else "403"))
+        out, _ = self.verify(resolve=lambda name: [])
+        self.assertEqual(out["sandbox_private_literal"], "skipped")
+        self.assertEqual(out["sandbox_private_hostname"], "skipped")
+        self.assertEqual(out["guard_exercised"], "failed", "a run that never exercised the guard does not pass")
 
     def test_a_peer_name_that_does_not_resolve_to_the_peer_is_skipped(self) -> None:
         out, _ = self.verify(tailscale_peer="phone.tail1234.ts.net:8443")

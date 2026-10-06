@@ -462,6 +462,11 @@ def live_verify(
                 record("sandbox_tailscale_peer", "skipped", f"{peer_name} does not resolve to {peer_host} from this host (give the peer's Tailscale IPv4 address)")
         else:
             record("tailscale_host_peer", "skipped", "no --tailscale-peer HOST:PORT given")
+        probes = ("sandbox_private_literal", "sandbox_private_hostname", "sandbox_tailscale_peer")
+        if "passed" in (results.get(p) for p in probes):
+            record("guard_exercised", "passed", "at least one sandbox request was rejected by the host guard")
+        else:
+            record("guard_exercised", "failed", "no sandbox request reached the host guard; nothing proved it")
         if tcp_connect("127.0.0.1", hub_port):
             record("hub_session_port", "passed", f"host -> 127.0.0.1:{hub_port} (Magic Conch session listener) connected")
         else:

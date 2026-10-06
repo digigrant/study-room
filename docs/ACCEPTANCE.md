@@ -62,6 +62,7 @@ What it cannot prove is the real host: the WSL2 kernel modules, the real daemon,
     - `host_private` passes (the host reaches the test address);
     - `sandbox_private_hostname` passes, which means the host guard rejected the sandbox: the guard's rejection counter rose during the step, and neither Docker Sandboxes' own policy (403) nor a failed `sbx exec` answered instead;
     - `sandbox_private_literal` is skipped, because the sandbox's own deny rule for `10.0.0.0/8` answers first with a 403; it may also pass, if the request reached the guard and was rejected. It must not fail;
+    - `guard_exercised` passes: at least one sandbox request was rejected by the host guard. If every guard step was skipped or failed, it fails, and so does the whole check;
     - `sandbox_public` passes;
     - `tailscale_cgroup` and `hub_cgroup` pass (the processes run outside the daemon's unit), and so do `tailscale_running` and `hub_session_port`;
     - `tailscale_host_peer` connects from the host, and `sandbox_tailscale_peer` passes the same way as `sandbox_private_hostname`: the host guard rejects the sandbox's request through the peer's `sslip.io` name.
