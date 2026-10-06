@@ -81,6 +81,15 @@ def config_findings(config: Config, lock: lockmod.Lock, runner: Runner, keyring:
     return f
 
 
+def egress_findings(runner: Runner, uid: int, check=None) -> list[Finding]:
+    from . import egress
+
+    problems = (check or (lambda: egress.check(uid, runner=runner)))()
+    if not problems:
+        return [Finding(OK, "egress guard", f"the Docker Sandboxes daemon runs inside {egress.UNIT}; private and link-local destinations are rejected")]
+    return [Finding(FAIL, "egress guard", f"{p.message} (fix: {p.hint})") for p in problems]
+
+
 def sandbox_findings(config: Config, runner: Runner) -> list[Finding]:
     sbx = Sbx(runner, config.sandbox_name)
     try:

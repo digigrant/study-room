@@ -26,6 +26,7 @@ CATEGORIES = {
     "group": "change group membership (sudo)",
     "policy": "initialize Docker Sandboxes' global network policy",
     "install": "install a downloaded, checksum-verified package (sudo)",
+    "firewall": "install a host firewall guard and its sudo rule (sudo)",
 }
 
 
@@ -92,6 +93,10 @@ def build_plan(
     docker_repo_configured: bool,
     prepare_obsidian: Callable[[], None] | None = None,
     prepare_docker_key: Callable[[], None] | None = None,
+    egress_state=None,
+    egress_user: str | None = None,
+    egress_uid: int | None = None,
+    sbx_bin: str = "/usr/bin/sbx",
 ) -> Plan:
     plan = Plan()
     # ── Platform boundary (SPEC 5) ─────────────────────────────────────────
@@ -202,6 +207,25 @@ def build_plan(
                 "Initialize Docker Sandboxes' network policy with the balanced preset",
                 "sandboxes need an initialized policy; Study Room then adds only sandbox-scoped rules. An existing policy is never overwritten",
                 [["sbx", "policy", "init", "balanced"]],
+            )
+        )
+
+    # ── Host egress guard for the Docker Sandboxes daemon (decision 2) ────
+    if egress_state is not None and not egress_state.ready and egress_user:
+        from . import egress
+
+        commands, prepare = egress.setup_commands(paths, egress_user, sbx_bin=sbx_bin)
+        plan.changes.append(
+            Change(
+                "egress-guard",
+                "firewall",
+                "Run the Docker Sandboxes daemon in a managed unit with a host egress guard",
+                "rejects the daemon's connections to private, link-local, CGNAT (Tailscale) and IPv6 ULA addresses, whatever name led there, "
+                "so no sandbox can reach other devices on the home network. It covers every Docker Sandbox this user runs; "
+                "tailscaled, the Magic Conch hub and other programs are not affected",
+                commands,
+                after=f"`study-room doctor` checks that the daemon runs inside {egress.UNIT}",
+                prepare=prepare,
             )
         )
 

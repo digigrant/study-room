@@ -99,15 +99,16 @@ for who in "$tailscaled:tailscaled" "$hub:magic-conch hub" "$userapp:user app"; 
   for e in "${PRIVATE[@]}" "${PUBLIC[@]}"; do expect_open "${who%%:*}" "${e%% *}" "${who#*:} -> ${e#* }"; done
 done
 
+counters=$(load "$unit" status 2>/dev/null | grep -Eo 'rejected=[0-9]+' | head -1)
+[ -n "$counters" ] && [ "${counters#rejected=}" -gt 0 ] && ok "status reports rejected connections ($counters)" || bad "status counters missing: $counters"
+
 echo "# 5. idempotent reload, one jump per family, status recorded"
 load "$unit" >/dev/null && load "$unit" >/dev/null
 n4=$(iptables -S OUTPUT | grep -c -- '-j STUDY-ROOM-SBX'); n6=$(ip6tables -S OUTPUT | grep -c -- '-j STUDY-ROOM-SBX')
 [ "$n4" = 1 ] && [ "$n6" = 1 ] && ok "one jump rule per family after repeated loads" || bad "jump rules: ipv4=$n4 ipv6=$n6"
-iptables -S OUTPUT | grep -q -- "--path ${prefix#/}/$unit_rel" && ok "the jump matches the unit's cgroup path" || bad "jump does not reference the unit cgroup: $(iptables -S OUTPUT | grep STUDY)"
+iptables -S OUTPUT | grep -- '-j STUDY-ROOM-SBX' | grep -qF -- "${prefix#/}/$unit_rel" && ok "the jump matches the unit's cgroup path" || bad "jump does not reference the unit cgroup: $(iptables -S OUTPUT | grep STUDY)"
 status=/run/study-room/sbx-egress.json
 if [ -f "$status" ] && grep -q "\"cgroup_inode\": $(stat -c %i "$unit")" "$status"; then ok "status file records the unit cgroup inode"; else bad "status file missing or wrong: $(cat "$status" 2>/dev/null)"; fi
-counters=$(load "$unit" status 2>/dev/null | grep -Eo 'rejected=[0-9]+' | head -1)
-[ -n "$counters" ] && [ "${counters#rejected=}" -gt 0 ] && ok "status reports rejected connections ($counters)" || bad "status counters missing: $counters"
 
 echo "# 6. a restarted daemon gets a new cgroup; the guard must be reloaded (ExecStartPre does this)"
 rmdir "$unit" && mkdir "$unit"

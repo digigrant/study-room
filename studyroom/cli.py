@@ -21,6 +21,7 @@ from pathlib import Path
 from . import (
     config as configmod,
     doctor as doctormod,
+    egress,
     entry as entrymod,
     fsutil,
     hostdetect,
@@ -141,6 +142,8 @@ def cmd_setup(ctx: Context, args) -> int:
             key_file.write_bytes(resp.read())
         setupmod.verify_key_fingerprint(ctx.runner, key_file, lock["docker_apt_repository"]["key_fingerprint"])
 
+    sbx_bin = ctx.runner.which("sbx") or "/usr/bin/sbx"
+    egress_state = egress.install_state(ctx.paths, facts.user, ctx.runner, sbx_bin=sbx_bin)
     plan = setupmod.build_plan(
         facts,
         lock,
@@ -150,6 +153,10 @@ def cmd_setup(ctx: Context, args) -> int:
         docker_repo_configured=repo_ok,
         prepare_obsidian=lambda: obsidian.download(ctx.paths, lock["obsidian_desktop"], say=say),
         prepare_docker_key=prepare_key,
+        egress_state=egress_state,
+        egress_user=facts.user,
+        egress_uid=os.getuid(),
+        sbx_bin=sbx_bin,
     )
     for line in setupmod.render(plan):
         say(line)
@@ -349,6 +356,7 @@ def cmd_run(ctx: Context, args) -> int:
 
 def cmd_doctor(ctx: Context, args) -> int:
     findings = doctormod.host_findings(_facts(ctx), ctx.lock)
+    findings += doctormod.egress_findings(ctx.runner, os.getuid())
     try:
         cfg = ctx.config()
         findings += doctormod.config_findings(cfg, ctx.lock, ctx.runner, ctx.keyring())
@@ -401,6 +409,14 @@ def cmd_verify(ctx: Context, args) -> int:
     if "infisical" in components:
         components = [c for c in components if c != "infisical"]
         verify_infisical_access(ctx)
+        if not components:
+            return 0
+    if "egress" in components:
+        components = [c for c in components if c != "egress"]
+        results = egress.live_verify(ctx.runner, cfg.sandbox_name, uid=os.getuid(), confirm=typed_confirmation, say=say, tailscale_peer=args.tailscale_peer)
+        receipts.write(cfg, ctx.lock, "egress", "-", results)
+        if "failed" in results.values():
+            return 1
         if not components:
             return 0
     sbx = Sbx(ctx.runner, cfg.sandbox_name)
@@ -556,12 +572,13 @@ def parser() -> argparse.ArgumentParser:
     s.set_defaults(fn=cmd_build)
     s = sub.add_parser("test", help="run the hermetic test suites (no credentials, providers or vault)")
     s.add_argument("--build", action="store_true", help="build the sandbox image if it is missing")
-    s.add_argument("--only", choices=["host", "sandbox"])
+    s.add_argument("--only", choices=["host", "egress", "sandbox"])
     s.set_defaults(fn=cmd_test)
     s = sub.add_parser("verify", help="explicit live connectivity checks")
     s.add_argument("--live", action="store_true", required=True)
     s.add_argument("--provider", choices=PROVIDERS, default="openai")
-    s.add_argument("components", nargs="*", help=f"any of: {', '.join(verifymod.COMPONENTS + ('infisical',))} (default: provider)")
+    s.add_argument("components", nargs="*", help=f"any of: {', '.join(verifymod.COMPONENTS + ('infisical', 'egress'))} (default: provider)")
+    s.add_argument("--tailscale-peer", metavar="HOST:PORT", help="egress check: a Tailscale peer address the host can reach")
     s.set_defaults(fn=cmd_verify)
     s = sub.add_parser("check-updates", help="show dependency drift (installs nothing)")
     s.add_argument("--refresh", action="store_true")

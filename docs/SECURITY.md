@@ -55,7 +55,7 @@ The main Pi session has full bash. Docker Sandboxes keeps host files outside the
 - Limits: 10 s to connect, 30 s for the whole operation, 5 MiB per response (decompressed), 60,000 characters of text, 30 PDF pages. Overflow text goes only to sandbox-ephemeral storage and is removed at session end. Writing under the vault mount is refused.
 - Results are framed as untrusted third-party content, with the final URL as the source.
 
-**DNS resolution.** Outside a sandbox, `web_fetch` resolves the host itself, rejects the hop if any answer is non-public, and connects to exactly the validated address, so DNS rebinding cannot slip in between check and connect. Inside Docker Sandboxes the sandbox has no DNS resolver: every request goes through the trusted proxy, which resolves and connects on the host. In that case `web_fetch` validates the URL and literal addresses, and the host-side network policy is the outer limit. In `balanced` mode only allowlisted domains are reachable. In `web` mode, Docker Sandboxes does not apply its IP-range deny rules to host names. A public name that resolves to a private address is therefore not blocked by the proxy. This is a known gap, open for decision (see [ACCEPTANCE.md](ACCEPTANCE.md#gates)).
+**DNS resolution.** Outside a sandbox, `web_fetch` resolves the host itself, rejects the hop if any answer is non-public, and connects to exactly the validated address, so DNS rebinding cannot slip in between check and connect. Inside Docker Sandboxes the sandbox has no DNS resolver: every request goes through the trusted proxy, which resolves and connects on the host. In that case `web_fetch` validates the URL and literal addresses, and the host-side network policy is the outer limit. In `balanced` mode only allowlisted domains are reachable. Docker Sandboxes does not apply its IP-range deny rules to host names, so on its own the proxy would let a public name that resolves to a private address through. The [host egress guard](#host-egress-guard) closes that: the host firewall rejects the daemon's connections to private, link-local and CGNAT addresses whatever name led there.
 
 `web_fetch` is a safer default and a quality control, not an egress boundary: `safe_bash` can run `curl`.
 
@@ -68,6 +68,31 @@ The main Pi session has full bash. Docker Sandboxes keeps host files outside the
 | Scope | this sandbox only; global policy is untouched | this sandbox only; never a global allow-all |
 
 The mode applies to the whole sandbox: the teacher, the researcher and every shell command get the same egress. Switching to `web` requires typed confirmation and shows the trade-off. The entry banner always shows the active mode.
+
+## Host egress guard
+
+Docker Sandboxes ends every sandbox's traffic in its host daemon's userspace network stack (gVisor's netstack). The daemon then opens the real connections itself. So the host firewall sees all sandbox egress as the daemon's own outbound traffic. There is no Docker bridge or sandbox subnet, which is why a `DOCKER-USER` rule would never see this traffic.
+
+By the captain's decision of 2026-10-06 (option (a), backed by the host):
+
+- **The daemon runs only inside a managed unit.** `study-room setup` installs `~/.config/systemd/user/study-room-sbx.service` (in `study-room.slice`), which runs `sbx daemon start` in the foreground.
+- **The guard loads before the daemon starts.** The unit's `ExecStartPre` runs `sudo -n /usr/local/libexec/study-room/sbx-egress-guard load` from inside the unit's own cgroup. The guard refuses to load from anywhere else.
+- **Rejected destinations.** The rule matches the unit's cgroup and its children. It rejects TCP with a reset, and other protocols with an ICMP "administratively prohibited":
+  - IPv4: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16` (link-local and metadata) and `100.64.0.0/10` (CGNAT, which Tailscale uses);
+  - IPv6: `fc00::/7` (unique local, including Tailscale's `fd7a:115c:a1e0::/48`) and `fe80::/10`.
+- **Exceptions.**
+  - Loopback stays open: the DNS stub, and host services a sandbox policy deliberately allows, such as the Magic Conch session listener on `127.0.0.1:8431`.
+  - Port 53 stays open, because WSL2 points `resolv.conf` at a private address.
+- **Scope.** The rule covers every Docker Sandbox this user runs, not only Study Room's; the captain accepted this. `tailscaled`, the Magic Conch hub (a Docker container), and the user's own programs live in other cgroups and are not matched. On WSL2 the rule lives in the Ubuntu distribution's own firewall, not in Windows.
+- **The rule's form.** It uses `iptables-nft`'s cgroup match, so it lives in the nftables ruleset. nftables' native `socket cgroupv2` match needs `CONFIG_NFT_SOCKET`, which the current WSL2 kernel (6.6) does not build. The xtables cgroup match is built on WSL2 and on Ubuntu's kernels.
+- **Reload on restart.** A cgroup match binds to the cgroup that exists when the rule loads, and a restarted service gets a new cgroup. The unit therefore reloads the guard at every start.
+- **Fail closed.** If the guard cannot load, the daemon does not start. `study-room run` refuses to start unless the daemon runs inside the unit and the guard is loaded for the unit's current cgroup. `study-room doctor` reports the same checks.
+- **Narrow sudo rule.** `/etc/sudoers.d/study-room-egress` permits only the guard's `load`, `unload` and `status` actions.
+
+Residual risks:
+
+- In `web` mode, a name that resolves to a loopback address could still reach a host service listening on port 80 or 443 on this machine. Loopback is deliberately left open; other devices on the network are not reachable.
+- A Docker Sandboxes daemon started outside the unit is not covered. `study-room run` refuses to start Study Room while one is running, and `doctor` reports it.
 
 ## GitHub
 

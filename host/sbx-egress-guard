@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# sbx-egress-guard {load|unload|status}
+#
+# Host firewall guard for the Docker Sandboxes daemon (SPEC 12.2/13, decision
+# 2, captain 2026-10-06). Installed root-owned at
+# /usr/local/libexec/study-room/sbx-egress-guard and run only through sudo
+# by the study-room-sbx.service user unit:
+#
+#   ExecStartPre=/usr/bin/sudo -n <this> load     (inside the unit's cgroup)
+#   ExecStopPost=/usr/bin/sudo -n <this> unload
+#
+# Docker Sandboxes terminates every sandbox's traffic in the host daemon's
+# userspace network stack and opens real connections from the daemon
+# process, so the host firewall sees sandbox egress as the daemon's own
+# OUTPUT traffic. `load` rejects connections from the daemon's cgroup (and
+# its children) to private, link-local, CGNAT (Tailscale) and IPv6 ULA and
+# link-local ranges, whatever host name led there. Loopback stays open (the
+# DNS stub and approved host services such as the Magic Conch session port),
+# and so does port 53 (WSL2 points resolv.conf at a private address).
+# Processes outside the unit (tailscaled, the Magic Conch hub, the user's own
+# programs) are not matched.
+#
+# The rules use iptables-nft's cgroup match, so they live in the nftables
+# ruleset. nftables' native `socket cgroupv2` needs CONFIG_NFT_SOCKET, which
+# the current WSL2 kernel does not build; the xtables cgroup match is
+# available on both WSL2 and Ubuntu's generic kernel.
+#
+# A cgroup match binds to the cgroup that exists when the rule is loaded, and
+# a restarted service gets a new cgroup: that is why the unit reloads the
+# guard at every start, from inside its own cgroup.
+set -euo pipefail
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+CHAIN=STUDY-ROOM-SBX
+STATUS_DIR=/run/study-room
+STATUS_FILE=$STATUS_DIR/sbx-egress.json
+SLICE=study-room.slice
+UNIT=study-room-sbx.service
+GUARDED_V4=(10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10)
+GUARDED_V6=(fc00::/7 fe80::/10)
+
+die() { echo "sbx-egress-guard: $*" >&2; exit 1; }
+
+[ "$(id -u)" -eq 0 ] || die "must run as root (through the study-room-sbx unit's sudo rule)"
+uid=${SUDO_UID:-}
+[[ $uid =~ ^[0-9]+$ ]] && [ "$uid" -ne 0 ] || die "run through sudo from the user's study-room-sbx unit (SUDO_UID missing)"
+[ -f /sys/fs/cgroup/cgroup.controllers ] || die "cgroup v2 (unified hierarchy) is required"
+
+# Test hook for the functional test only: sudo's env_reset removes it, so it
+# cannot be set through the sudoers rule.
+prefix=${STUDY_ROOM_GUARD_CGROUP_PREFIX:-}
+[[ -z $prefix || $prefix =~ ^/[A-Za-z0-9._-]+$ ]] || die "invalid test prefix"
+expected="${prefix#/}${prefix:+/}user.slice/user-$uid.slice/user@$uid.service/$SLICE/$UNIT"
+
+own_cgroup() { sed -n 's/^0:://p' /proc/self/cgroup | head -1; }
+
+remove_jumps() {  # remove_jumps iptables|ip6tables: delete every OUTPUT jump to the chain
+  local tool=$1 n i
+  for i in $(seq 1 64); do
+    n=$("$tool" -w -L OUTPUT --line-numbers -n 2>/dev/null | awk -v c="$CHAIN" '$2 == c {print $1; exit}')
+    [ -n "$n" ] || return 0
+    "$tool" -w -D OUTPUT "$n"
+  done
+  die "could not remove the old $tool jump rules"
+}
+
+load_family() {  # load_family iptables|ip6tables cgroup-path ranges...
+  local tool=$1 path=$2; shift 2
+  local tcp_reject icmp_reject
+  if [ "$tool" = iptables ]; then icmp_reject=icmp-admin-prohibited; else icmp_reject=icmp6-adm-prohibited; fi
+  tcp_reject=tcp-reset
+  {
+    echo "*filter"
+    echo ":$CHAIN - [0:0]"
+    echo "-F $CHAIN"
+    echo "-A $CHAIN -p udp --dport 53 -j RETURN"
+    echo "-A $CHAIN -p tcp --dport 53 -j RETURN"
+    for r in "$@"; do
+      echo "-A $CHAIN -d $r -p tcp -j REJECT --reject-with $tcp_reject"
+      echo "-A $CHAIN -d $r -j REJECT --reject-with $icmp_reject"
+    done
+    echo "COMMIT"
+  } | "$tool-restore" -w --noflush
+  remove_jumps "$tool"
+  "$tool" -w -I OUTPUT 1 -m cgroup --path "$path" -j "$CHAIN"
+}
+
+unload_family() {
+  local tool=$1
+  remove_jumps "$tool"
+  "$tool" -w -F "$CHAIN" 2>/dev/null || true
+  "$tool" -w -X "$CHAIN" 2>/dev/null || true
+}
+
+case ${1:-} in
+  load)
+    current=$(own_cgroup)
+    [ "${current#/}" = "$expected" ] || die "refusing to load: run from the $UNIT unit (cgroup ${current:-unknown}, expected /$expected)"
+    inode=$(stat -c %i "/sys/fs/cgroup/$expected")
+    load_family iptables "$expected" "${GUARDED_V4[@]}" || { unload_family iptables; die "could not load the IPv4 rules"; }
+    load_family ip6tables "$expected" "${GUARDED_V6[@]}" || { unload_family iptables; unload_family ip6tables; die "could not load the IPv6 rules"; }
+    install -d -m 0755 "$STATUS_DIR"
+    tmp=$(mktemp "$STATUS_DIR/.sbx-egress.XXXXXX")
+    printf '{"cgroup": "%s", "cgroup_inode": %s, "uid": %s, "loaded_at": "%s"}\n' "$expected" "$inode" "$uid" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp"
+    chmod 0644 "$tmp"
+    mv "$tmp" "$STATUS_FILE"
+    echo "sbx-egress-guard: loaded for /$expected"
+    ;;
+  unload)
+    unload_family iptables
+    unload_family ip6tables
+    rm -f "$STATUS_FILE"
+    echo "sbx-egress-guard: unloaded"
+    ;;
+  status)
+    if ! iptables -w -S "$CHAIN" >/dev/null 2>&1; then echo "not loaded"; exit 3; fi
+    rejected=0
+    for tool in iptables ip6tables; do
+      n=$("$tool" -w -L "$CHAIN" -v -n -x 2>/dev/null | awk '$3 == "REJECT" {s += $1} END {print s + 0}')
+      rejected=$((rejected + n))
+    done
+    path=$(iptables -w -S OUTPUT | sed -n "s/.*--path \([^ ]*\) -j $CHAIN\$/\1/p" | head -1)
+    echo "loaded cgroup=${path:-none} rejected=$rejected"
+    ;;
+  *)
+    echo "usage: sbx-egress-guard {load|unload|status}" >&2
+    exit 2
+    ;;
+esac

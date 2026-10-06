@@ -26,13 +26,13 @@ git clone https://github.com/digigrant/study-room.git ~/study-room
 | --- | --- |
 | `study-room setup [--yes]` | Detect the host, show the exact changes, apply only approved ones, then run the interactive ceremonies (Docker sign-in, Infisical handles, Obsidian Sync, provider sign-in). `--yes` approves host changes, never ceremonies. |
 | `study-room doctor` | Report host, configuration and sandbox readiness. Changes nothing. |
-| `study-room auth openai\|kimi` | Authorize a provider on this host; the state goes to this host's Infisical path. Kimi stays experimental. |
+| `study-room auth openai\|kimi` | Authorize a provider on this host; the state is stored in the Agents Infisical project (`OPENAI_REFRESH_TOKEN`), as this host's entry. Kimi stays experimental. |
 | `study-room models openai\|kimi` | List the authenticated model catalog. |
 | `study-room obsidian setup` | Guide the fresh Linux vault replica and Sync onboarding, then verify it. |
 | `study-room network balanced\|web` | Switch the sandbox-scoped network mode (`web` asks for typed confirmation). |
 | `study-room run [--no-obsidian]` | Start or reuse Obsidian, prepare the sandbox, and enter the tmux/Pi session. |
 | `study-room test [--build]` | Hermetic tests: no credentials, providers, GitHub mutations or vault. |
-| `study-room verify --live [provider\|research\|github\|obsidian\|infisical]` | Explicit, consented, bounded live checks with the cheap verification model. |
+| `study-room verify --live [provider\|research\|github\|obsidian\|infisical\|egress]` | Explicit, consented, bounded live checks: the cheap verification model, and the host egress guard. |
 | `study-room check-updates [--refresh]` | Dependency drift. Installs nothing. |
 | `study-room bump <dependency>` | Move one pin on a branch, rebuild from scratch, rerun the tests. |
 | `study-room destroy` | Remove the sandbox and its disposable state. Keeps the vault and host configuration. |
@@ -43,6 +43,7 @@ git clone https://github.com/digigrant/study-room.git ~/study-room
 | Path | Contents |
 | --- | --- |
 | `bin/study-room`, `studyroom/` | Trusted host command (Python 3.12+, standard library only). |
+| `host/sbx-egress-guard` | Root-owned host firewall guard for the Docker Sandboxes daemon, installed by setup. |
 | `lock/study-room.lock.json` | Every pin and integrity value. Builds fail on any mismatch. |
 | `sandbox/` | Sandbox image (`Dockerfile`), pinned npm runtime, Pi extensions (`study-room-guard`, `web-fetch`, `verification-budget`), entry scripts and the sandbox test suites. |
 | `tests/host/`, `tests/fixtures/` | Hermetic host tests and host-capability fixtures. |

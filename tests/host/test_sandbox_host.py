@@ -483,7 +483,7 @@ class RunOrchestrationTests(TempHome):
         fake.runner.on(["pgrep"], "4242\n")  # Obsidian already running: reused, not restarted
         facts = detect(FixtureProbe(host_fixture("wsl2-ready")))
         out: list[str] = []
-        code = entry.run(cfg, LOCK, fake.runner, facts, say=out.append)
+        code = entry.run(cfg, LOCK, fake.runner, facts, egress_check=lambda: [], say=out.append)
         self.assertEqual(code, 0)
         seq = [" ".join(a[:3]) for a in fake.runner.argvs() if a[0] == "sbx"]
         first = lambda prefix: next(i for i, s in enumerate(seq) if s.startswith(prefix))
@@ -510,7 +510,7 @@ class RunOrchestrationTests(TempHome):
         fake.runner.on(["sbx", "policy", "check"], Result([], 0, "Allowed: study-room-egress-probe.example:443\n"))
         fake.runner.on(["git"], Result([], 128, "", ""))
         fake.runner.on(["pgrep"], "1\n")
-        entry.run(cfg, LOCK, fake.runner, detect(FixtureProbe(host_fixture("wsl2-ready"))), say=lambda *_: None)
+        entry.run(cfg, LOCK, fake.runner, detect(FixtureProbe(host_fixture("wsl2-ready"))), egress_check=lambda: [], say=lambda *_: None)
         configure = next(i for a, i in fake.runner.calls if a[:2] == ["sbx", "exec"] and "-u" in a)
         self.assertTrue(any("wider than intended" in w for w in json.loads(configure)["warnings"]))
 

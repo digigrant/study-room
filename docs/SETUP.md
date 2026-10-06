@@ -57,10 +57,50 @@ It then asks before each change. What each change is for:
 - **docker-group** (optional): lets `study-room build` use Docker without sudo. Membership is root-equivalent on the host. If you decline, use `study-room run --sudo-docker`.
 - **sbx-policy**: only if Docker Sandboxes' global network policy was never initialized, `sbx policy init balanced`. An existing policy is never changed. All of Study Room's own rules are scoped to its sandbox.
 - **obsidian**: the pinned `.deb`, downloaded to `~/.cache/study-room/downloads` and checked against the lock's SHA-256 before `sudo apt-get install`.
+- **egress-guard** (required, on native Ubuntu and on WSL2): runs the Docker Sandboxes daemon in a managed unit, with a host firewall rule that stops every sandbox from reaching other devices on your network. See [the host egress guard](#host-egress-guard).
 
 When a change only takes effect in a new session (group membership, a new keyring daemon), setup says so and stops. Log out and back in, then run `study-room setup` again. Finished steps are not repeated: a second run on a ready host reports "No host changes are needed."
 
 `--yes` approves the host changes. It never skips a sign-in ceremony.
+
+### Host egress guard
+
+Docker Sandboxes makes every sandbox connection from its host daemon. Its own policy does not check what a host name resolves to. Without a host rule, a public name pointing at a home-network address (your router, a NAS, a phone on Tailscale) could therefore be reached from a sandbox in `web` mode. The guard prevents that. Setup's `egress-guard` change:
+
+1. installs the guard as root at `/usr/local/libexec/study-room/sbx-egress-guard`;
+2. installs a sudo rule, `/etc/sudoers.d/study-room-egress`, checked with `visudo -cf`, that allows only the guard's `load`, `unload` and `status` actions;
+3. writes the user units `~/.config/systemd/user/study-room.slice` and `study-room-sbx.service`;
+4. stops any Docker Sandboxes daemon started another way;
+5. runs `systemctl --user enable --now study-room-sbx.service`.
+
+At every start the unit loads the guard from inside its own cgroup, then runs `sbx daemon start`. The guard rejects the daemon's connections to `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `100.64.0.0/10`, `fc00::/7` and `fe80::/10`. It allows loopback and port 53.
+
+- **On WSL2** the rule lives in the Ubuntu distribution's own firewall (iptables-nft inside WSL), not in Windows Defender Firewall. Nothing changes on the Windows side. Reach home-network devices from Windows as usual.
+- **Every sandbox is covered**, including devenv's. Tailscale and the Magic Conch hub run outside the unit and are not affected; the live check proves it.
+- **Never start the daemon any other way** (`sbx daemon start -d` from a shell, for example). `study-room run` refuses to start while a daemon runs outside the unit, and `study-room doctor` reports it. To fix it:
+
+  ```bash
+  sbx daemon stop
+  systemctl --user restart study-room-sbx.service
+  ```
+
+- If the guard cannot load, for example because the kernel lacks the xtables cgroup match, the daemon does not start, and `journalctl --user -u study-room-sbx.service` shows why.
+
+Prove it on the real host (it asks for confirmation and `sudo`):
+
+```bash
+study-room verify --live egress --tailscale-peer <tailscale-ip>:<port>
+```
+
+The check:
+
+- creates a dummy interface with `10.213.0.1` and a test web server;
+- confirms the host can reach it, but the sandbox cannot, by address or through `10-213-0-1.sslip.io`, even with a temporary sandbox allow rule;
+- confirms the sandbox still reaches `api.github.com`;
+- shows that `tailscaled` and the Magic Conch hub run outside the daemon's unit, and that Tailscale and the hub's session port keep working;
+- with `--tailscale-peer`, connects to that peer from the host and fails to reach it from the sandbox.
+
+Everything temporary is removed afterwards.
 
 ## 4. The ceremonies
 
@@ -145,3 +185,4 @@ Each check shows the exact model, thinking level, request and output limits, sea
 | `authorization expired or revoked` | `study-room auth openai`. |
 | `pin/checksum mismatch` during a build | A download or upstream no longer matches the lock. Nothing was installed; investigate before any `study-room bump`. |
 | A blocked fetch in `balanced` mode | Expected outside the allowed destinations; use `study-room network web` (with its risk) if the lesson needs it. |
+| `the host egress guard is not protecting the Docker Sandboxes daemon` | `sbx daemon stop; systemctl --user restart study-room-sbx.service`. If the unit fails, read `journalctl --user -u study-room-sbx.service`. |

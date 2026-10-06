@@ -142,6 +142,11 @@
         "constraint": ">= 2.4"
       },
       {
+        "name": "iptables",
+        "source": "ubuntu",
+        "constraint": ">= 1.8.10"
+      },
+      {
         "name": "ca-certificates",
         "source": "ubuntu",
         "constraint": ">= 20240203"

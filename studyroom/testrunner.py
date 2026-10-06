@@ -33,9 +33,30 @@ class SuiteResult:
     detail: str
 
 
+def _discover(pattern: str) -> unittest.TestSuite:
+    return unittest.TestLoader().discover(str(repo_root() / "tests" / "host"), pattern=pattern, top_level_dir=str(repo_root()))
+
+
+def _without_functional(suite: unittest.TestSuite) -> unittest.TestSuite:
+    out = unittest.TestSuite()
+    for test in suite:
+        if isinstance(test, unittest.TestSuite):
+            out.addTest(_without_functional(test))
+        elif "functional" not in test.id():
+            out.addTest(test)
+    return out
+
+
+def egress_suite(verbosity: int = 1) -> SuiteResult:
+    """The guard script on real kernel netfilter, in a disposable privileged container."""
+    result = unittest.TextTestRunner(verbosity=verbosity, stream=sys.stderr).run(_discover("test_egress_functional.py"))
+    if result.skipped and not result.failures and not result.errors:
+        return SuiteResult("egress", "skipped", "; ".join(sorted({r for _, r in result.skipped})))
+    return SuiteResult("egress", "passed" if result.wasSuccessful() else "failed", f"{result.testsRun} tests, {len(result.failures) + len(result.errors)} failing")
+
+
 def host_suite(verbosity: int = 1) -> SuiteResult:
-    loader = unittest.TestLoader()
-    suite = loader.discover(str(repo_root() / "tests" / "host"), top_level_dir=str(repo_root()))
+    suite = _without_functional(_discover("test*.py"))
     result = unittest.TextTestRunner(verbosity=verbosity, stream=sys.stderr).run(suite)
     skipped = len(result.skipped)
     detail = f"{result.testsRun} tests, {len(result.failures)} failures, {len(result.errors)} errors, {skipped} skipped"
@@ -67,6 +88,8 @@ def run(runner: Runner, *, build: bool = False, only: str | None = None, verbosi
     results: list[SuiteResult] = []
     if only in (None, "host"):
         results.append(host_suite(verbosity))
+    if only in (None, "egress"):
+        results.append(egress_suite(verbosity))
     if only in (None, "sandbox"):
         results.append(sandbox_suite(runner, build=build))
     print("\nStudy Room hermetic tests:")

@@ -10,6 +10,7 @@ it needs the real value.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -196,9 +197,19 @@ def run(
     allow_sudo_docker: bool = False,
     drift: list[updates.Drift] | None = None,
     unlock_keyring=None,
+    egress_check=None,
     say=print,
 ) -> int:
     preflight(config, lock, runner)
+    from . import egress
+
+    problems = (egress_check or (lambda: egress.check(os.getuid(), runner=runner)))()
+    if problems:
+        raise fail(
+            Failure.MISSING_PREREQUISITE,
+            "the host egress guard is not protecting the Docker Sandboxes daemon: " + "; ".join(p.message for p in problems),
+            hint=problems[0].hint,
+        )
     if unlock_keyring:
         unlock_keyring()
     obs_line = "Obsidian: skipped (--no-obsidian)"

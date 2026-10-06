@@ -462,6 +462,15 @@ The entry banner MUST display the active mode. Changing mode is an explicit trus
 
 In `web` mode, either agent can send mounted study data to an arbitrary public web destination. The hardened fetch tool does not prevent `safe_bash` from using another client. Users select this mode for research breadth with that trade-off visible.
 
+> **Review outcome (captain, 2026-10-06).** Inside Docker Sandboxes, name resolution happens in the host daemon. The daemon does not check an allowed name's resolved address against CIDR rules, so in `web` mode a public name resolving to a home-network address would otherwise be reachable. Decision: accept `web` mode, backed by a host egress guard.
+>
+> - The Docker Sandboxes daemon runs only inside the managed systemd user unit `study-room-sbx.service`.
+> - A firewall rule matching that unit's cgroup rejects its connections to private, link-local and CGNAT addresses (IPv4 and IPv6), regardless of host name. Loopback and port 53 stay open.
+> - The rule covers every Docker Sandbox on the host, which the captain accepted. It does not affect Tailscale, the Magic Conch hub, or other host processes. On WSL2 it lives in the distribution's own firewall, not in Windows.
+> - `study-room run` fails closed without the guard.
+>
+> See `docs/SECURITY.md` (Host egress guard).
+
 ## 14. Provider model policy
 
 ### 14.1 Deployment contract

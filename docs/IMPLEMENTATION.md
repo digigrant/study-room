@@ -12,7 +12,7 @@ How the code maps to [SPEC](SPEC.md), and the places where an implementation con
 | 10 Learn | `sandbox/bin/fetch-upstream.sh`, `sandbox/bin/verify-checkout.sh`, `sandbox/lib/profile.ts` (`learnResources`) |
 | 11 researcher | `sandbox/lib/policy.ts`, `sandbox/lib/closure.ts`, `sandbox/lib/panes.ts`, `sandbox/extensions/study-room-guard/` |
 | 12 research tools | `sandbox/lib/url-policy.ts`, `sandbox/lib/fetcher.ts`, `sandbox/lib/extract.ts`, `sandbox/extensions/web-fetch/` |
-| 13 network | `studyroom/network.py` |
+| 13 network | `studyroom/network.py`; host egress guard: `host/sbx-egress-guard`, `studyroom/egress.py`, `tests/egress/functional.sh` |
 | 14 model profiles, thinking | `studyroom/config.py`, `sandbox/lib/thinking.ts` |
 | 15 credentials | `studyroom/oauth/`, `studyroom/resolver.py`, `studyroom/infisical.py`, `studyroom/keyring.py`, `studyroom/redact.py` |
 | 17 lock | `lock/study-room.lock.json`, `studyroom/lock.py`, `sandbox/Dockerfile` |
@@ -52,6 +52,12 @@ How the code maps to [SPEC](SPEC.md), and the places where an implementation con
 - The client refuses to write any secret other than the configured OAuth secrets.
 - A value Study Room did not write (for example a token pasted by hand) is never used, and is replaced only after confirmation in `study-room auth`.
 
+**Host egress guard (captain's decision, 2026-10-06).** Docker Sandboxes ends sandbox traffic in gVisor's userspace netstack inside its host daemon. The sbx 0.46.0 binary carries gVisor's `tcpip/stack` and its TCP `Forwarder`, and has no host bridge or `DOCKER-USER` handling. So the guard matches the daemon process, by the cgroup of its managed systemd user unit, not a network segment.
+
+- **Why iptables-nft's xtables cgroup match, not nftables' native `socket cgroupv2`:** the current WSL2 kernel (`linux-msft-wsl-6.6.y`, `config-wsl`) has `# CONFIG_NFT_SOCKET is not set`. It does build `CONFIG_NETFILTER_XT_MATCH_CGROUP` and `CONFIG_NFT_COMPAT`, and so do Ubuntu's kernels. The rules still land in the nftables ruleset.
+- **Reload at every start:** a cgroup match binds to the cgroup present at load time. The unit therefore reloads the guard in `ExecStartPre`, which runs inside the new cgroup. The functional test shows that without the reload, a restarted daemon is not covered.
+- **Where it was tested:** the functional test runs on this repository's development VM, whose kernel has the xtables cgroup match but not `NFT_SOCKET`. The WSL2 and native kernels are checked live.
+
 **Kimi catalog endpoint.** `study-room models kimi` calls `https://api.kimi.com/coding/v1/models`. That endpoint is not verified and is used only on explicit request.
 
 ## Running the tests
@@ -59,5 +65,6 @@ How the code maps to [SPEC](SPEC.md), and the places where an implementation con
 ```bash
 bin/study-room test --build          # host suite + sandbox suites in the image, network disabled
 bin/study-room test --only host      # Python only
+bin/study-room test --only egress    # the egress guard on real netfilter (needs privileged Docker)
 STUDY_ROOM_NODE=/path/to/node22 bin/study-room test --only host   # also cross-checks the profile contract in TypeScript
 ```
