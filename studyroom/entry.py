@@ -214,6 +214,9 @@ def run(
     say(ensure_sandbox(sbx, config.paths, config, template, say=say))
     for line in network.apply(sbx, config.paths, network.plan(config.network_mode, enabled_providers(config), github=config.data["github"]["enabled"])):
         say(f"network: {line}")
-    payload = profile_payload(config, lock, host_summary(facts, obs_line), entry_warnings(config, lock, drift or []))
+    warnings = entry_warnings(config, lock, drift or [])
+    if config.network_mode == "balanced" and network.wider_than_balanced(sbx):
+        warnings.append("Docker Sandboxes' global policy allows arbitrary destinations, so balanced mode is wider than intended; review `sbx policy ls`")
+    payload = profile_payload(config, lock, host_summary(facts, obs_line), warnings)
     configure(sbx, payload)
     return sbx.attach(["/opt/study-room/bin/study-room-entry"])

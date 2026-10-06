@@ -30,13 +30,18 @@ class Handles:
     project_id: str
     client_id: str
     client_secret: str
+    oauth_project_id: str | None = None  # optional separate project for OAuth state
 
 
 def handles_from_keyring(keyring: Keyring, *, interactive: bool = False) -> Handles:
+    oauth_project = None
+    if keyring.item_state("infisical-oauth-project-id").state != "missing":
+        oauth_project = keyring.lookup("infisical-oauth-project-id", interactive=interactive)
     return Handles(
         project_id=keyring.lookup("infisical-project-id", interactive=interactive),
         client_id=keyring.lookup("infisical-client-id", interactive=interactive),
         client_secret=keyring.lookup("infisical-client-secret", interactive=interactive),
+        oauth_project_id=oauth_project,
     )
 
 
@@ -60,6 +65,7 @@ class Infisical:
         redact.register(handles.client_secret)
         redact.register(handles.client_id)
         redact.register(handles.project_id)
+        redact.register(handles.oauth_project_id)
 
     # --- auth ------------------------------------------------------------
     def _token(self) -> str:
@@ -88,6 +94,11 @@ class Infisical:
     def _auth(self, token: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {token}"}
 
+    def project_for(self, path: str) -> str:
+        """OAuth state may live in its own project; everything else uses the main one."""
+        in_prefix = path == self.write_prefix or path.startswith(self.write_prefix + "/")
+        return self.handles.oauth_project_id if in_prefix and self.handles.oauth_project_id else self.handles.project_id
+
     def _check_write_path(self, path: str) -> None:
         if not (path == self.write_prefix or path.startswith(self.write_prefix + "/")):
             raise fail(Failure.CONFIGURATION_INVALID, f"refusing to write outside {self.write_prefix}: {path}")
@@ -97,7 +108,7 @@ class Infisical:
         token = token or self._token()
         query = urllib.parse.urlencode(
             {
-                "projectId": self.handles.project_id,
+                "projectId": self.project_for(path),
                 "environment": self.environment,
                 "secretPath": path,
                 "viewSecretValue": "true",
@@ -131,7 +142,7 @@ class Infisical:
         resp = self.client.request(
             "POST",
             f"{self.domain}/api/v2/folders",
-            json_body={"projectId": self.handles.project_id, "environment": self.environment, "name": name, "path": parent or "/"},
+            json_body={"projectId": self.project_for(path), "environment": self.environment, "name": name, "path": parent or "/"},
             headers=self._auth(token),
         )
         if resp.ok or (resp.status == 400 and "already exists" in resp.text().lower()):
@@ -158,7 +169,7 @@ class Infisical:
         self._check_write_path(path)
         token = token or self._token()
         redact.register(value)
-        body = {"projectId": self.handles.project_id, "environment": self.environment, "secretPath": path, "secretValue": value, "type": "shared"}
+        body = {"projectId": self.project_for(path), "environment": self.environment, "secretPath": path, "secretValue": value, "type": "shared"}
         url = f"{self.domain}/api/v4/secrets/{urllib.parse.quote(name, safe='')}"
         resp = self.client.request("PATCH" if exists else "POST", url, json_body=body, headers=self._auth(token))
         if not exists and resp.status == 404:

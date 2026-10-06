@@ -31,6 +31,11 @@ KEYS = {
     "infisical-client-id": "Study Room Infisical sbx-host client ID",
     "infisical-client-secret": "Study Room Infisical sbx-host client secret",
 }
+# Optional: a separate Infisical project for Study Room's OAuth state, for
+# deployments that isolate it by project instead of by path permissions.
+OPTIONAL_KEYS = {
+    "infisical-oauth-project-id": "Study Room Infisical project ID for OAuth state",
+}
 LOOKUP_TIMEOUT = 10
 
 
@@ -112,13 +117,13 @@ class Keyring:
         return value
 
     def store(self, key: str, value: str) -> None:
-        if key not in KEYS:
+        if key not in KEYS and key not in OPTIONAL_KEYS:
             raise fail(Failure.INTERNAL, f"unknown keyring key {key!r}")
         if not value:
             raise fail(Failure.CONFIGURATION_INVALID, f"refusing to store an empty value for {key!r}")
         redact.register(value)
         res = self.runner.run(
-            ["secret-tool", "store", f"--label={KEYS[key]}", "service", self.service, "key", key],
+            ["secret-tool", "store", f"--label={KEYS.get(key) or OPTIONAL_KEYS[key]}", "service", self.service, "key", key],
             input=value,
             timeout=180,
         )

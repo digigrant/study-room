@@ -380,3 +380,16 @@ class ResolveCommandTests(TempHome):
         self.assertNotEqual(code, 0)
         self.assertEqual(out, "")
         self.assertIn("disabled", err)
+
+
+class SeparateProjectTests(TempHome):
+    def test_oauth_state_can_live_in_its_own_project(self) -> None:
+        t = FakeTransport()
+        t.on("POST", "https://app.infisical.com/api/v1/auth/universal-auth/login", json_response({"accessToken": "inf-session-FAKE-2"}))
+        t.on("GET", "https://app.infisical.com/api/v4/secrets/", json_response({"secret": {"secretValue": "v"}}))
+        inf = Infisical("https://app.infisical.com", "dev", Handles("agents-proj", "cid", FAKE_CLIENT_SECRET, oauth_project_id="study-room-proj"), Client(t))
+        inf.get("/", "GITHUB_GEJ_MACHINE_PAT")
+        inf.get(oauth_path("/study-room/oauth", "openai", INSTALL), "OAUTH_STATE")
+        reads = [r.url for r in t.requests if "/api/v4/secrets/" in r.url]
+        self.assertIn("projectId=agents-proj", reads[0])
+        self.assertIn("projectId=study-room-proj", reads[1])

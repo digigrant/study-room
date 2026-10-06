@@ -1,6 +1,6 @@
 # Study Room Specification
 
-**Status:** Design baseline; implementation has not started
+**Status:** Design baseline; V1 implemented with hermetic tests, live acceptance pending (see [ACCEPTANCE.md](ACCEPTANCE.md))
 
 **Primary targets:** x86_64 Ubuntu Desktop 24.04 LTS and x86_64 Ubuntu 24.04 under WSL2
 

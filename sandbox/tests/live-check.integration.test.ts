@@ -49,7 +49,7 @@ describe("live checks under hard limits", { skip, timeout: 120_000 }, () => {
   });
 
   it("refuses to run without a Study Room placeholder", () => {
-    assert.equal(placeholderCheck(spec, { OPENAI_API_KEY: "sk-real-looking-value" }).status, "failed");
+    assert.equal(placeholderCheck(spec, { OPENAI_API_KEY: "sk-FAKE-real-looking-value" }).status, "failed");
     assert.equal(placeholderCheck(spec, {}).status, "failed");
     assert.equal(placeholderCheck(spec, { OPENAI_API_KEY: "sr-openai-abc" }).status, "passed");
   });

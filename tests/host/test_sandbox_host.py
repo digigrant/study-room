@@ -426,19 +426,27 @@ class BumpTests(TempHome):
 
 class RepositoryHygieneTests(TempHome):
     def test_no_credentials_are_committed(self) -> None:
-        from studyroom import redact
+        import re
 
-        files = subprocess.run(["git", "-C", str(repo_root()), "ls-files"], capture_output=True, text=True).stdout.split()
+        # Credential shapes, not field names: code legitimately says `refresh=refresh`.
+        shapes = [
+            re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
+            re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}\b"),
+            re.compile(r"\bgithub_pat_[A-Za-z0-9_]{30,}\b"),
+            re.compile(r"\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{20,}\b"),
+            re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+            re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+        ]
+        files = subprocess.run(["git", "-C", str(repo_root()), "ls-files", "--cached", "--others", "--exclude-standard"], capture_output=True, text=True).stdout.split()
         offenders = []
         for rel in files:
             path = repo_root() / rel
             if not path.is_file() or path.suffix in (".png", ".deb", ".tgz"):
                 continue
-            text = path.read_text(errors="ignore")
-            for line in text.splitlines():
-                if "FAKE" in line or "PLACEHOLDER" in line or "example" in line.lower():
+            for line in path.read_text(errors="ignore").splitlines():
+                if "FAKE" in line:
                     continue
-                if redact.contains_secret(line) and not any(tok in line for tok in ('"integrity"', "sha512-", "access_token", "refresh_token", "Bearer ${", "Bearer $", "apiKey", "api_key", '"access"', '"refresh"', "token=", "Authorization")):
+                if any(p.search(line) for p in shapes):
                     offenders.append(f"{rel}: {line.strip()[:80]}")
         self.assertEqual(offenders, [])
 
@@ -446,3 +454,12 @@ class RepositoryHygieneTests(TempHome):
         text = (repo_root() / ".gitignore").read_text()
         for pattern in ("node_modules", "*.jsonl", ".env", "obsidian-vault/"):
             self.assertIn(pattern, text)
+
+
+class EgressProbeTests(TempHome):
+    def test_a_global_allow_all_is_detected(self) -> None:
+        fake = FakeSbx()
+        fake.runner.on(["sbx", "policy", "check"], Result([], 0, "Allowed: study-room-egress-probe.example:443\n"))
+        self.assertTrue(network.wider_than_balanced(Sbx(fake.runner, "study-room")))
+        fake.runner.on(["sbx", "policy", "check"], Result([], 1, "Denied: study-room-egress-probe.example:443\nReason: no matching allow rule\n"))
+        self.assertFalse(network.wider_than_balanced(Sbx(fake.runner, "study-room")))

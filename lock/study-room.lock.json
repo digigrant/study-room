@@ -110,7 +110,8 @@
       "read_secret": "GET /api/v4/secrets/{name}",
       "create_secret": "POST /api/v4/secrets/{name}",
       "update_secret": "PATCH /api/v4/secrets/{name}",
-      "create_folder": "POST /api/v2/folders"
+      "create_folder": "POST /api/v2/folders (creates missing parent folders; permission is checked on the parent path)",
+      "revoke_token": "POST /api/v1/auth/token/revoke"
     }
   },
   "system_packages": {

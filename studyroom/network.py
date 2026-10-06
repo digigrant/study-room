@@ -122,6 +122,16 @@ def apply(sbx: Sbx, paths: HostPaths, desired: Plan) -> list[str]:
     return changes
 
 
+# A reserved name (RFC 2606) no baseline would allow: if the policy allows it,
+# some rule allows arbitrary destinations. Checking evaluates rules only; no
+# request or DNS lookup is made.
+EGRESS_PROBE = "study-room-egress-probe.example:443"
+
+
+def wider_than_balanced(sbx: Sbx) -> bool:
+    return sbx.check(EGRESS_PROBE)
+
+
 def forget(paths: HostPaths, sandbox: str) -> None:
     """The sandbox (and its scoped rules) is gone; drop the record."""
     try:

@@ -204,6 +204,9 @@ def infisical_ceremony(ctx: Context) -> None:
             if not value:
                 raise fail(Failure.PERMISSION_DECLINED, f"no value entered for {key}")
             kr.store(key, value)
+        separate = getpass.getpass("Optional: a separate Infisical project ID for Study Room OAuth state (Enter = same project): ").strip()
+        if separate:
+            kr.store("infisical-oauth-project-id", separate)
     inf = ctx.infisical(interactive=True)
     cfg = ctx.config()
     pat = read_github_pat(inf, cfg.data["infisical"]["github_secret_path"], cfg.data["infisical"]["github_secret_name"])
@@ -426,15 +429,16 @@ def verify_infisical_scope(ctx: Context) -> None:
         raise fail(Failure.PERMISSION_DECLINED, "Infisical probe not confirmed")
     token = inf.session_token()
     name = f"SCOPE_PROBE_{uuid.uuid4().hex[:8].upper()}"
-    base = {"projectId": inf.handles.project_id, "environment": inf.environment, "type": "shared"}
+    base = {"projectId": inf.project_for(inside), "environment": inf.environment, "type": "shared"}
     try:
         inf.put(inside, name, "probe", exists=False, token=token)
         ctx_client = inf.client
         ctx_client.request("DELETE", f"{inf.domain}/api/v4/secrets/{name}", json_body={**base, "secretPath": inside}, headers={"Authorization": f"Bearer {token}"})
         say(f"  inside: ok (wrote and deleted {inside}/{name})")
-        resp = ctx_client.request("POST", f"{inf.domain}/api/v4/secrets/{name}", json_body={**base, "secretPath": "/", "secretValue": "probe"}, headers={"Authorization": f"Bearer {token}"})
+        outside = {**base, "projectId": inf.handles.project_id}
+        resp = ctx_client.request("POST", f"{inf.domain}/api/v4/secrets/{name}", json_body={**outside, "secretPath": "/", "secretValue": "probe"}, headers={"Authorization": f"Bearer {token}"})
         if resp.ok:
-            ctx_client.request("DELETE", f"{inf.domain}/api/v4/secrets/{name}", json_body={**base, "secretPath": "/"}, headers={"Authorization": f"Bearer {token}"})
+            ctx_client.request("DELETE", f"{inf.domain}/api/v4/secrets/{name}", json_body={**outside, "secretPath": "/"}, headers={"Authorization": f"Bearer {token}"})
             raise fail(
                 Failure.CONFIGURATION_INVALID,
                 "sbx-host could write outside the Study Room path (the probe was deleted again)",

@@ -142,7 +142,7 @@ describe("direct transport", () => {
   it("does not leak ambient credentials from the environment", async () => {
     const saved = { ...process.env };
     process.env.GITHUB_TOKEN = "ghp_FAKEaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    process.env.OPENAI_API_KEY = "sk-study-room-PLACEHOLDER";
+    process.env.OPENAI_API_KEY = "sk-study-room-FAKE-PLACEHOLDER";
     try {
       const { resolver } = scriptedResolver({ "pub.example-site.org": [[PUBLIC_A, 4]] });
       seen.length = 0;
