@@ -102,7 +102,7 @@ def load_template(runner: Runner, sbx: Sbx, tag: str, paths: HostPaths, *, sudo:
 def ensure(runner: Runner, sbx: Sbx, lock: lockmod.Lock, paths: HostPaths, *, rebuild: bool = False, allow_sudo: bool = False, say=print) -> str:
     """Return the template tag for this checkout, building and loading it if needed."""
     tag = image_tag(lock)
-    if not rebuild and tag in sbx.template_names():
+    if not rebuild and sbx.has_template(tag):
         return tag
     build(runner, lock, tag, no_cache=rebuild, allow_sudo=allow_sudo, say=say)
     load_template(runner, sbx, tag, paths, sudo=not docker_usable(runner))

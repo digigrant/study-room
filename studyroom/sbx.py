@@ -85,6 +85,16 @@ class Sbx:
                 names.add(t)
         return names
 
+    def has_template(self, tag: str) -> bool:
+        """True when the template is loaded. Matches the raw listing too, so an
+        unexpected JSON shape never forces a rebuild and reload."""
+        if tag in self.template_names():
+            return True
+        res = self._run("template", "ls", check=False)
+        listing = res.stdout
+        repo, _, version = tag.partition(":")
+        return tag in listing or f"docker.io/{tag}" in listing or any(repo in line and version in line for line in listing.splitlines())
+
     def template_load(self, tar_path: str) -> None:
         self._run("template", "load", tar_path, timeout=1800)
 

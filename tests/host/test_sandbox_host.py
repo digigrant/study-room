@@ -463,3 +463,71 @@ class EgressProbeTests(TempHome):
         self.assertTrue(network.wider_than_balanced(Sbx(fake.runner, "study-room")))
         fake.runner.on(["sbx", "policy", "check"], Result([], 1, "Denied: study-room-egress-probe.example:443\nReason: no matching allow rule\n"))
         self.assertFalse(network.wider_than_balanced(Sbx(fake.runner, "study-room")))
+
+
+class RunOrchestrationTests(TempHome):
+    """`study-room run` end to end with fake sbx, docker and Obsidian (no real host changes)."""
+
+    def test_run_prepares_the_sandbox_in_order_and_attaches(self) -> None:
+        from studyroom import image
+
+        cfg = self.make_config()
+        self.make_vault(cfg)
+        fake = FakeSbx()
+        tag = image.image_tag(LOCK)
+        fake.runner.available |= {"docker"}
+        fake.runner.on(["sbx", "template", "ls"], lambda argv, _i: Result(argv, 0, f"NAME\n{tag}\n"))
+        fake.runner.on(["sbx", "exec"], lambda argv, _i: Result(argv, 0, "study-room-configure: ok\n"))
+        fake.runner.on(["sbx", "policy", "check"], Result([], 1, "Denied: x\n"))
+        fake.runner.on(["git"], Result([], 128, "", "not a repo"))
+        fake.runner.on(["pgrep"], "4242\n")  # Obsidian already running: reused, not restarted
+        facts = detect(FixtureProbe(host_fixture("wsl2-ready")))
+        out: list[str] = []
+        code = entry.run(cfg, LOCK, fake.runner, facts, say=out.append)
+        self.assertEqual(code, 0)
+        seq = [" ".join(a[:3]) for a in fake.runner.argvs() if a[0] == "sbx"]
+        first = lambda prefix: next(i for i, s in enumerate(seq) if s.startswith(prefix))
+        self.assertLess(first("sbx secret set-custom"), first("sbx create"), "placeholders exist before the sandbox is created")
+        self.assertLess(first("sbx create"), first("sbx policy deny"))
+        self.assertLess(first("sbx policy allow"), first("sbx exec"), "rules are in place before entry")
+        configure = next((a, i) for a, i in fake.runner.calls if a[:2] == ["sbx", "exec"] and "-u" in a)
+        self.assertEqual(configure[0][configure[0].index("-u") + 1], "root")
+        payload = json.loads(configure[1])
+        self.assertEqual(payload["workspace"], str(cfg.study_dir))
+        self.assertEqual(fake.runner.interactive_calls[-1], ["sbx", "exec", "-it", "study-room", "/opt/study-room/bin/study-room-entry"])
+        self.assertFalse(any(a[:2] == ["docker", "build"] for a in fake.runner.interactive_calls), "a loaded template is reused")
+        self.assertIn("already running", payload["host_summary"][1], "a healthy Obsidian is reused, not restarted")
+        self.assertEqual(fake.runner.detached_calls, [])
+
+    def test_global_allow_all_is_flagged_in_the_banner(self) -> None:
+        from studyroom import image
+
+        cfg = self.make_config()
+        self.make_vault(cfg)
+        fake = FakeSbx()
+        tag = image.image_tag(LOCK)
+        fake.runner.on(["sbx", "template", "ls"], lambda argv, _i: Result(argv, 0, f"{tag}\n"))
+        fake.runner.on(["sbx", "policy", "check"], Result([], 0, "Allowed: study-room-egress-probe.example:443\n"))
+        fake.runner.on(["git"], Result([], 128, "", ""))
+        fake.runner.on(["pgrep"], "1\n")
+        entry.run(cfg, LOCK, fake.runner, detect(FixtureProbe(host_fixture("wsl2-ready"))), say=lambda *_: None)
+        configure = next(i for a, i in fake.runner.calls if a[:2] == ["sbx", "exec"] and "-u" in a)
+        self.assertTrue(any("wider than intended" in w for w in json.loads(configure)["warnings"]))
+
+
+class DoctorTests(TempHome):
+    def test_doctor_reports_without_secrets(self) -> None:
+        from studyroom import doctor
+        from studyroom.keyring import Keyring
+
+        cfg = self.make_config()
+        self.make_vault(cfg)
+        kr_runner = FakeRunner(available={"secret-tool", "busctl"}).on(["busctl"], 'aoao 1 "/x/1" 0').on(["git"], Result([], 128, "", ""))
+        findings = doctor.host_findings(detect(FixtureProbe(host_fixture("wsl2-ready"))), LOCK)
+        findings += doctor.config_findings(cfg, LOCK, kr_runner, Keyring(kr_runner))
+        lines = doctor.render(findings)
+        self.assertTrue(any("sbx 0.46.0 (pinned 0.46.0)" in l for l in lines))
+        self.assertTrue(any(l.startswith("ok   infisical handles") for l in lines))
+        self.assertTrue(any("never been verified" in l for l in lines))
+        self.assertFalse(any(a[:2] == ["secret-tool", "lookup"] for a in kr_runner.argvs()), "doctor never reads secret values")
+        self.assertEqual(doctor.exit_code(findings), 0, "a ready host with only unverified live checks is not a failure")
