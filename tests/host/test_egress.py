@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
+import sys
 from pathlib import Path
+from unittest import mock
 
 from studyroom import egress, entry
 from studyroom import lock as lockmod
@@ -190,6 +193,52 @@ class EntryTests(TempHome):
         self.assertEqual(ctx.exception.failure, Failure.MISSING_PREREQUISITE)
         self.assertIn("systemctl --user restart study-room-sbx.service", ctx.exception.hint or "")
         self.assertFalse(any(a[:2] == ["sbx", "create"] for a in runner.argvs()), "nothing starts without the guard")
+
+
+def free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+class StartHttpServerTests(TempHome):
+    """The live check's test web server is accepting connections before anything probes it."""
+
+    def start_with(self, script: str, port: int, procs: list, **kw):
+        real_popen = subprocess.Popen
+
+        def popen(_argv, **opts):
+            procs.append(real_popen([sys.executable, "-c", script], **opts))
+            return procs[-1]
+
+        with mock.patch.object(egress.subprocess, "Popen", popen):
+            return egress.start_http_server("127.0.0.1", port, **kw)
+
+    def test_returns_once_the_real_server_answers(self) -> None:
+        port = free_port()
+        server = egress.start_http_server("127.0.0.1", port)
+        self.addCleanup(server.stop)
+        self.assertEqual(egress.host_http_get(f"http://127.0.0.1:{port}/"), 200)
+
+    def test_waits_for_a_server_that_binds_late(self) -> None:
+        port = free_port()
+        script = f"import socket, time; time.sleep(0.5); s = socket.create_server(('127.0.0.1', {port})); time.sleep(30)"
+        server = self.start_with(script, port, [])
+        self.addCleanup(server.stop)
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            pass
+
+    def test_a_server_that_exits_is_a_missing_prerequisite(self) -> None:
+        with self.assertRaises(StudyRoomError) as ctx:
+            self.start_with("raise SystemExit(3)", free_port(), [])
+        self.assertEqual(ctx.exception.failure, Failure.MISSING_PREREQUISITE)
+
+    def test_a_server_that_never_binds_is_stopped_and_fails(self) -> None:
+        procs: list = []
+        with self.assertRaises(StudyRoomError) as ctx:
+            self.start_with("import time; time.sleep(30)", free_port(), procs, timeout=0.3)
+        self.assertEqual(ctx.exception.failure, Failure.MISSING_PREREQUISITE)
+        self.assertIsNotNone(procs[0].poll(), "the server process is stopped, not left running")
 
 
 class LiveVerifyTests(TempHome):

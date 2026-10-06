@@ -28,6 +28,7 @@ import re
 import shlex
 import socket
 import subprocess
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -295,14 +296,22 @@ class _Server:
             self.proc.kill()
 
 
-def start_http_server(ip: str, port: int) -> _Server:
-    proc = subprocess.Popen(
+def start_http_server(ip: str, port: int, *, timeout: float = 5.0) -> _Server:
+    server = _Server(subprocess.Popen(
         ["python3", "-m", "http.server", str(port), "--bind", ip],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
-    )
-    return _Server(proc)
+    ))
+    deadline = time.monotonic() + timeout
+    while server.proc.poll() is None and time.monotonic() < deadline:
+        try:
+            with socket.create_connection((ip, port), timeout=0.5):
+                return server
+        except OSError:
+            time.sleep(0.05)
+    server.stop()
+    raise fail(Failure.MISSING_PREREQUISITE, f"the test web server did not start listening on {ip}:{port} within {timeout:g}s")
 
 
 def host_http_get(url: str) -> int | None:
