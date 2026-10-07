@@ -1,0 +1,44 @@
+{
+  "description": "WSL2 without nested virtualization (no /dev/kvm) and without systemd",
+  "machine": "x86_64",
+  "user": "learner",
+  "uid": 1000,
+  "files": {
+    "/etc/os-release": "PRETTY_NAME=\"Ubuntu 24.04.1 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"24.04\"\nID=ubuntu\nID_LIKE=debian\n",
+    "/proc/sys/kernel/osrelease": "5.15.167.4-microsoft-standard-WSL2\n"
+  },
+  "paths": [
+    "/run/WSL",
+    "/mnt/wslg"
+  ],
+  "rw_paths": [],
+  "env": {
+    "WAYLAND_DISPLAY": "wayland-0",
+    "DISPLAY": ":0",
+    "XDG_RUNTIME_DIR": "/run/user/1000",
+    "HOME": "/home/learner"
+  },
+  "groups": [
+    "learner",
+    "sudo",
+    "kvm"
+  ],
+  "configured_groups": [
+    "learner",
+    "sudo",
+    "kvm"
+  ],
+  "disk_free_gib": 80,
+  "binaries": [
+    "sudo",
+    "git",
+    "busctl",
+    "dpkg-query"
+  ],
+  "commands_output": {
+    "busctl --user status org.freedesktop.secrets": {
+      "rc": 0,
+      "stdout": "PID=1234\n"
+    }
+  }
+}

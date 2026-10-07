@@ -1,0 +1,4 @@
+# The sandbox image build context is the repository root; only sandbox/ is sent.
+*
+!sandbox/
+sandbox/node_modules

@@ -1,0 +1,16 @@
+# Study Room never commits local state, secrets, or generated artifacts (SPEC 22).
+__pycache__/
+*.pyc
+.venv/
+node_modules
+/build/
+/dist/
+*.log
+.pi/
+*.jsonl
+.env
+.env.*
+# Local vault content, OAuth state, receipts, and caches live under XDG paths,
+# never in this checkout; these patterns are a backstop.
+obsidian-vault/
+oauth-state*.json

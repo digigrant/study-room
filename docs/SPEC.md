@@ -1,6 +1,6 @@
 # Study Room Specification
 
-**Status:** Design baseline; implementation has not started
+**Status:** Design baseline; V1 implemented with hermetic tests, live acceptance pending (see [ACCEPTANCE.md](ACCEPTANCE.md))
 
 **Primary targets:** x86_64 Ubuntu Desktop 24.04 LTS and x86_64 Ubuntu 24.04 under WSL2
 
@@ -462,6 +462,16 @@ The entry banner MUST display the active mode. Changing mode is an explicit trus
 
 In `web` mode, either agent can send mounted study data to an arbitrary public web destination. The hardened fetch tool does not prevent `safe_bash` from using another client. Users select this mode for research breadth with that trade-off visible.
 
+> **Review outcome (captain, 2026-10-06).** Inside Docker Sandboxes, name resolution happens in the host daemon. The daemon does not check an allowed name's resolved address against CIDR rules, so in `web` mode a public name resolving to a home-network address would otherwise be reachable. Decision: accept `web` mode, backed by a host egress guard.
+>
+> - The Docker Sandboxes daemon runs only inside the managed systemd user unit `study-room-sbx.service`.
+> - A firewall rule matching that unit's cgroup rejects its connections to private, link-local and CGNAT addresses (IPv4 and IPv6), regardless of host name. Loopback and port 53 stay open.
+> - The rule covers every Docker Sandbox on the host, which the captain accepted. It does not affect Tailscale, the Magic Conch hub, or other host processes. On WSL2 it lives in the distribution's own firewall, not in Windows.
+> - `study-room run` fails closed without the guard.
+> - Residual risk: on an IPv6-enabled network, a home-network device's global-unicast IPv6 address is outside the guarded ranges, so in `web` mode a name resolving to one could still reach it (native Ubuntu; WSL2 only with mirrored networking).
+>
+> See `docs/SECURITY.md` (Host egress guard).
+
 ## 14. Provider model policy
 
 ### 14.1 Deployment contract
@@ -529,6 +539,8 @@ The identity MUST receive only the narrow read/write scope needed for Study Room
 ```
 
 It MUST NOT receive project-wide write authority merely for convenience. If the required path scope cannot be enforced, implementation stops for explicit review rather than silently broadening access.
+
+> **Review outcome (captain, 2026-10-06).** Infisical's Free plan cannot enforce path-scoped grants. After review, the OpenAI OAuth state is kept in the existing Agents project, in the secret `OPENAI_REFRESH_TOKEN` (Kimi: `KIMI_REFRESH_TOKEN`). There is no paid upgrade and no separate project. `sbx-host` receives write access in that project. Study Room's client writes only those configured secrets. The value holds one entry per installation ID, so per-host state and independent rotation are preserved. See `docs/IMPLEMENTATION.md`.
 
 Each host has a random installation ID and independent OAuth state. Hostnames need not be embedded in secret names. Per-host state avoids concurrent refresh-token rotation races across WSL and native Ubuntu installations.
 

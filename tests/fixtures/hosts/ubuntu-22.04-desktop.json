@@ -1,0 +1,45 @@
+{
+  "description": "Ubuntu Desktop 22.04",
+  "machine": "x86_64",
+  "user": "learner",
+  "uid": 1000,
+  "files": {
+    "/etc/os-release": "PRETTY_NAME=\"Ubuntu 22.04.5 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"22.04\"\nID=ubuntu\nID_LIKE=debian\n",
+    "/proc/sys/kernel/osrelease": "6.8.0-45-generic\n"
+  },
+  "paths": [
+    "/run/systemd/system",
+    "/run/user/1000/systemd",
+    "/run/user/1000/bus",
+    "/dev/kvm"
+  ],
+  "rw_paths": [],
+  "env": {
+    "WAYLAND_DISPLAY": "wayland-0",
+    "DISPLAY": ":0",
+    "XDG_SESSION_TYPE": "wayland",
+    "XDG_RUNTIME_DIR": "/run/user/1000",
+    "HOME": "/home/learner"
+  },
+  "groups": [
+    "learner",
+    "sudo"
+  ],
+  "configured_groups": [
+    "learner",
+    "sudo"
+  ],
+  "disk_free_gib": 120,
+  "binaries": [
+    "sudo",
+    "git",
+    "busctl",
+    "dpkg-query"
+  ],
+  "commands_output": {
+    "busctl --user status org.freedesktop.secrets": {
+      "rc": 0,
+      "stdout": "PID=1234\n"
+    }
+  }
+}
